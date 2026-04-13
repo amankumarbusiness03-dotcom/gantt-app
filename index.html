@@ -402,6 +402,17 @@ const DEMO_TASKS = [
   {func:"Regulatory & Statutory Approvals",activity:"Fire NOC",start:"2026-03-20",end:"2026-04-30",owner:"",status:"",phase:"Phase 1"},
   {func:"Regulatory & Statutory Approvals",activity:"Electrical safety approval",start:"2026-03-20",end:"2026-04-30",owner:"",status:"",phase:"Phase 1"},
   {func:"Regulatory & Statutory Approvals",activity:"Import licenses (if applicable)",start:"2026-03-20",end:"2026-04-30",owner:"",status:"",phase:"Phase 1"},
+  // Missing tasks from sheet
+  {func:"Machine Procurement",activity:"CMM Specs and Finalize",start:"2026-04-10",end:"2026-05-30",owner:"Sriramulu",status:"",phase:"Phase 1"},
+  {func:"Machine Procurement",activity:"Delivery of inspection equipment",start:"2026-08-15",end:"2026-09-15",owner:"Tanish",status:"",phase:"Phase 1"},
+  {func:"Machine Procurement",activity:"Orbital Riveting Machines Trials",start:"2026-04-10",end:"2026-05-10",owner:"",status:"",phase:"Phase 1"},
+  {func:"Machine Procurement",activity:"Riveting Machine Finalize Samples and Order",start:"2026-05-10",end:"2026-06-15",owner:"",status:"",phase:"Phase 1"},
+  {func:"HR & Manpower",activity:"Local Saudi Vs Expat Cost Comparison",start:"2026-03-20",end:"2026-04-30",owner:"Sowmya",status:"",phase:"Phase 1"},
+  {func:"HR & Manpower",activity:"Draft Employee Agreement",start:"2026-04-15",end:"2026-04-30",owner:"Sowmya",status:"",phase:"Phase 1"},
+  {func:"HR & Manpower",activity:"Draft HR Policy",start:"2026-04-15",end:"2026-04-30",owner:"",status:"",phase:"Phase 1"},
+  {func:"HR & Manpower",activity:"Employee Insurance - Quote Comparison",start:"2026-03-20",end:"2026-04-30",owner:"",status:"",phase:"Phase 1"},
+  {func:"Quality & PPAP Docs",activity:"CBAM Coordination and Audit Reports",start:"2026-10-30",end:"2026-12-31",owner:"",status:"",phase:"Phase 1"},
+  {func:"Regulatory & Statutory Approvals",activity:"Consent for Production",start:"2026-03-20",end:"2026-04-30",owner:"Palani",status:"",phase:"Phase 1"},
 ];
 
 let allTasks = [];
@@ -525,8 +536,8 @@ function parseCSV(text) {
     if (funcCol >= 0 && cells[funcCol]) currentFunc = func;
 
     const start = fixDate(startCol >= 0 ? cells[startCol] : '');
-    const end   = fixDate(endCol   >= 0 ? cells[endCol]   : '');
-    if (!start || !end) continue;
+    if (!start) continue;  // must have start date at minimum
+    const end = fixDate(endCol >= 0 ? cells[endCol] : '') || start; // fallback: single-day
 
     // Sanitise owner: if it looks like a date or number, discard it
     let rawOwner = ownerCol >= 0 ? (cells[ownerCol] || '').trim() : '';
@@ -645,8 +656,11 @@ function renderTable() {
     <div class="stat"><div class="stat-val" style="color:var(--p2)">${total-ph1}</div><div class="stat-lbl">phase 2</div></div>
   `;
 
+  // Parse YYYY-MM-DD as LOCAL midnight — avoids UTC timezone shifting bars left
+  const parseLocal = s => { if(!s) return null; const [y,m,d]=s.split('-').map(Number); if(!y||!m||!d) return null; return new Date(y,m-1,d); };
+
   // Timeline bounds
-  const allD = tasks.flatMap(t=>[new Date(t.start),new Date(t.end)]).filter(d=>!isNaN(d));
+  const allD = tasks.flatMap(t=>[parseLocal(t.start),parseLocal(t.end)]).filter(d=>d&&!isNaN(d));
   if (!allD.length) {
     document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td>no tasks match filters</td></tr></tbody></table>';
     document.getElementById('loading').style.display = 'none';
@@ -658,7 +672,7 @@ function renderTable() {
   const maxD = new Date(Math.max(...allD)); maxD.setDate(maxD.getDate()+5);
   const totalMs = maxD - minD;
   const today = new Date();
-  const pct = d => Math.max(0, Math.min(100, ((new Date(d)-minD)/totalMs)*100));
+  const pct = s => { const d = parseLocal(s); if(!d) return 0; return Math.max(0, Math.min(100, ((d-minD)/totalMs)*100)); };
 
   // Month ticks
   const ticks = [];
@@ -668,7 +682,7 @@ function renderTable() {
     if (p>=0&&p<=100) ticks.push({label:td2.toLocaleDateString('en-US',{month:'short',year:'2-digit'}),p});
     td2.setMonth(td2.getMonth()+1);
   }
-  const todayPct = pct(today);
+  const todayPct = Math.max(0, Math.min(100, ((today-minD)/totalMs)*100));
 
   const ticksHTML = `<div style="position:relative;height:22px;min-width:400px">
     ${ticks.map(t=>`<span class="tick-label" style="position:absolute;font-size:9px;font-family:var(--mono);color:var(--text3);transform:translateX(-50%);left:${t.p}%;white-space:nowrap">${t.label}</span>`).join('')}
