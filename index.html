@@ -34,8 +34,6 @@ body {
   font-size: 13px;
   min-height: 100vh;
 }
-
-/* Header */
 .header {
   display: flex;
   align-items: center;
@@ -59,8 +57,6 @@ body {
   font-family: var(--mono);
 }
 .header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-
-/* Status indicator */
 .status-pill {
   display: flex;
   align-items: center;
@@ -75,8 +71,6 @@ body {
 }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-/* Filters */
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 select {
   background: var(--surface);
@@ -97,8 +91,6 @@ select {
   transition: border-color 0.15s;
 }
 select:hover { border-color: var(--accent); }
-
-/* Legend */
 .legend {
   display: flex;
   gap: 16px;
@@ -108,11 +100,8 @@ select:hover { border-color: var(--accent); }
 }
 .leg { display: flex; align-items: center; gap: 5px; font-size: 11px; font-family: var(--mono); color: var(--text2); }
 .leg-bar { width: 20px; height: 8px; border-radius: 2px; }
-
-/* Stats bar */
 .stats {
   display: flex;
-  gap: 1px;
   padding: 12px 28px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -127,8 +116,6 @@ select:hover { border-color: var(--accent); }
 }
 .stat-val { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); }
 .stat-lbl { font-size: 10px; color: var(--text3); margin-top: 2px; font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
-
-/* Table */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 1000px; }
 thead th {
@@ -155,8 +142,6 @@ td {
   vertical-align: middle;
   color: var(--text);
 }
-
-/* Section header rows */
 .section-row td {
   background: var(--surface2);
   font-family: var(--mono);
@@ -169,8 +154,6 @@ td {
   border-bottom: 1px solid var(--border2);
 }
 .section-row td span { display: inline-block; margin-right: 8px; color: var(--text3); }
-
-/* Phase badge */
 .phase-badge {
   font-family: var(--mono);
   font-size: 9px;
@@ -182,8 +165,6 @@ td {
 }
 .p1b { background: rgba(79,142,247,0.12); color: #7eb0ff; border: 1px solid rgba(79,142,247,0.25); }
 .p2b { background: rgba(232,168,74,0.12); color: #f0be72; border: 1px solid rgba(232,168,74,0.25); }
-
-/* Owner pill */
 .owner-pill {
   font-family: var(--mono);
   font-size: 10px;
@@ -194,24 +175,18 @@ td {
   padding: 2px 7px;
   white-space: nowrap;
 }
-
-/* Dates */
 .date-cell {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text3);
   white-space: nowrap;
 }
-
-/* Activity */
 .activity-cell {
   max-width: 230px;
   font-size: 12px;
   line-height: 1.4;
   color: var(--text);
 }
-
-/* Bar column */
 .bar-col { padding: 5px 10px; min-width: 400px; }
 .bar-outer {
   position: relative;
@@ -248,26 +223,6 @@ td {
   white-space: nowrap;
   pointer-events: none;
 }
-
-/* Month ticks */
-.tick-row { position: relative; height: 20px; }
-.tick-label {
-  position: absolute;
-  font-size: 9px;
-  font-family: var(--mono);
-  color: var(--text3);
-  transform: translateX(-50%);
-  white-space: nowrap;
-}
-.tick-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--border);
-}
-
-/* Loading */
 #loading {
   display: flex;
   flex-direction: column;
@@ -287,8 +242,6 @@ td {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* Error */
 #error-msg {
   display: none;
   padding: 24px 28px;
@@ -300,8 +253,6 @@ td {
   margin: 20px 28px;
   border-radius: 8px;
 }
-
-/* Refresh btn */
 .refresh-btn {
   background: var(--surface);
   border: 1px solid var(--border2);
@@ -314,8 +265,6 @@ td {
   transition: all 0.15s;
 }
 .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-/* Empty */
 .empty-row td {
   text-align: center;
   padding: 40px;
@@ -365,16 +314,10 @@ td {
 <div class="table-wrap" id="table-wrap" style="display:none"></div>
 
 <script>
-// ─────────────────────────────────────────────
-//  CONFIG — paste your Google Sheet published CSV URL here
-// ─────────────────────────────────────────────
+// ── CONFIG ────────────────────────────────────────────────────────────────────
 const SHEET_CSV_URL = window.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv';
-// Example:
-// https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv&gid=SHEET_GID
 
-// ─────────────────────────────────────────────
-//  FALLBACK DEMO DATA (used when no sheet URL is set)
-// ─────────────────────────────────────────────
+// ── DEMO DATA ─────────────────────────────────────────────────────────────────
 const DEMO_TASKS = [
   {func:"Project & Commercial Closure",activity:"Final MSA negotiation with customer",start:"2026-03-20",end:"2026-03-30",owner:"Sriram",status:"Not Started",phase:"Phase 1"},
   {func:"Project & Commercial Closure",activity:"MSA signing",start:"2026-03-20",end:"2026-03-31",owner:"Sriram",status:"",phase:"Phase 1"},
@@ -464,79 +407,151 @@ const DEMO_TASKS = [
 let allTasks = [];
 let usingDemo = false;
 
-// ─────────────────────────────────────────────
-//  CSV → tasks parser
-// ─────────────────────────────────────────────
+// ── ROBUST CSV PARSER (handles quoted fields with commas inside) ───────────────
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      // Handle escaped double-quotes ""
+      if (inQuotes && line[i+1] === '"') { current += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (ch === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+// ── DATE NORMALISER ───────────────────────────────────────────────────────────
+// Handles: M/D/YYYY, MM/DD/YYYY, YYYY-MM-DD, D-Mon-YYYY, Mon-DD-YYYY, DD Mon YYYY, etc.
 function fixDate(s) {
   if (!s) return '';
+  // Strip surrounding quotes and whitespace
+  s = s.replace(/^["'\s]+|["'\s]+$/g, '');
+  if (!s) return '';
 
-  const parts = s.split('/');
-  if (parts.length === 3) {
-    const month = parts[0].padStart(2,'0');
-    const day = parts[1].padStart(2,'0');
-    const year = parts[2];
-    return `${year}-${month}-${day}`;
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // M/D/YYYY or MM/DD/YYYY  (Google Sheets default US locale)
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    return `${slash[3]}-${slash[1].padStart(2,'0')}-${slash[2].padStart(2,'0')}`;
   }
+
+  // D/M/YYYY (some regional locales) — same regex, keep as fallback via new Date
+  // DD-Mon-YYYY or D-Mon-YYYY  e.g. "20-Mar-2026"
+  const dashMon = s.match(/^(\d{1,2})-([A-Za-z]+)-(\d{4})$/);
+  if (dashMon) {
+    const mo = monthNum(dashMon[2]); if (!mo) return '';
+    return `${dashMon[3]}-${mo}-${dashMon[1].padStart(2,'0')}`;
+  }
+
+  // DD Mon YYYY  e.g. "20 Mar 2026" or "20 March 2026"
+  const spaceMon = s.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+  if (spaceMon) {
+    const mo = monthNum(spaceMon[2]); if (!mo) return '';
+    return `${spaceMon[3]}-${mo}-${spaceMon[1].padStart(2,'0')}`;
+  }
+
+  // Mon DD YYYY  e.g. "Mar 20 2026"
+  const monSpace = s.match(/^([A-Za-z]+)\s+(\d{1,2})\s+(\d{4})$/);
+  if (monSpace) {
+    const mo = monthNum(monSpace[1]); if (!mo) return '';
+    return `${monSpace[3]}-${mo}-${monSpace[2].padStart(2,'0')}`;
+  }
+
+  // Last resort — let the browser try, but only accept clean YYYY-MM-DD output
+  const d = new Date(s);
+  if (!isNaN(d)) return d.toISOString().substring(0,10);
 
   return '';
 }
-  function parseCSV(text) {
-  const lines = text.trim().split('\n');
+
+function monthNum(name) {
+  const map = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+               jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12',
+               january:'01',february:'02',march:'03',april:'04',june:'06',
+               july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
+  return map[name.toLowerCase().substring(0,3)] || map[name.toLowerCase()] || null;
+}
+
+// ── CSV → TASKS ───────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const rawLines = text.trim().split('\n');
   const tasks = [];
   let currentFunc = '';
-  // Find header row (contains "Activity" and "Start Date")
+
+  // Find header row
   let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes('Activity') && lines[i].includes('Start Date')) { headerIdx = i; break; }
+  for (let i = 0; i < rawLines.length; i++) {
+    if (rawLines[i].includes('Activity') && rawLines[i].includes('Start Date')) {
+      headerIdx = i; break;
+    }
   }
   if (headerIdx < 0) return null;
 
-  const headers = lines[headerIdx].split(',').map(h => h.replace(/"/g,'').trim().toLowerCase());
-  const col = name => headers.findIndex(h => h.includes(name));
-  const phaseCol = col('phase');
-  const funcCol = col('function');
-  const actCol = col('activity');
-  const startCol = col('start');
-  const endCol = col('end');
-  const ownerCol = col('responsible');
-  const statusCol = col('status');
+  const headers = parseCSVLine(rawLines[headerIdx]).map(h => h.toLowerCase());
+  const col = (...names) => {
+    for (const name of names) {
+      const idx = headers.findIndex(h => h.includes(name));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
 
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const cells = lines[i].split(',').map(c => c.replace(/"/g,'').trim());
-    if (!cells[actCol]) continue;
-    const func = cells[funcCol] || currentFunc;
-    if (cells[funcCol]) currentFunc = func;
-    const start = fixDate(cells[startCol]);
-    const end = fixDate(cells[endCol]);
+  const phaseCol   = col('phase');
+  const funcCol    = col('function');
+  const actCol     = col('activity');
+  const startCol   = col('start');
+  const endCol     = col('end');
+  // Match "responsible", "owner", "r - name", "name" — whichever exists
+  const ownerCol   = col('responsible', 'owner', 'r - name', 'name');
+  const statusCol  = col('status', 'progress');
+
+  for (let i = headerIdx + 1; i < rawLines.length; i++) {
+    const cells = parseCSVLine(rawLines[i]);
+    const activity = actCol >= 0 ? cells[actCol] : '';
+    if (!activity) continue;
+
+    const func = (funcCol >= 0 && cells[funcCol]) ? cells[funcCol] : currentFunc;
+    if (funcCol >= 0 && cells[funcCol]) currentFunc = func;
+
+    const start = fixDate(startCol >= 0 ? cells[startCol] : '');
+    const end   = fixDate(endCol   >= 0 ? cells[endCol]   : '');
     if (!start || !end) continue;
+
     tasks.push({
-      phase: cells[phaseCol] || 'Phase 1',
+      phase:    phaseCol  >= 0 ? (cells[phaseCol]  || 'Phase 1') : 'Phase 1',
       func,
-      activity: cells[actCol],
+      activity,
       start,
       end,
-      owner: cells[ownerCol] || '',
-      status: cells[statusCol] || '',
+      owner:  ownerCol  >= 0 ? (cells[ownerCol]  || '').trim() : '',
+      status: statusCol >= 0 ? (cells[statusCol] || '').trim() : '',
     });
   }
   return tasks.length ? tasks : null;
 }
 
-// ─────────────────────────────────────────────
-//  Load data from Google Sheet or fall back to demo
-// ─────────────────────────────────────────────
+// ── LOAD ──────────────────────────────────────────────────────────────────────
 async function loadData() {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
 
   if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
-    usingDemo = true;
-    allTasks = DEMO_TASKS;
+    usingDemo = true; allTasks = DEMO_TASKS;
     setStatus('demo mode', false);
-    document.getElementById('last-updated').textContent = 'demo data — see README to connect your sheet';
-    renderAll();
-    return;
+    document.getElementById('last-updated').textContent = 'demo data — connect your sheet';
+    renderAll(); return;
   }
 
   try {
@@ -545,72 +560,67 @@ async function loadData() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     const parsed = parseCSV(text);
-    if (!parsed) throw new Error('could not parse sheet — check column names');
+    if (!parsed) throw new Error('could not parse sheet — check column names match exactly');
     allTasks = parsed;
+    usingDemo = false;
     setStatus('live', true);
     document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
     renderAll();
   } catch(e) {
     console.warn('Sheet load failed:', e);
-    allTasks = DEMO_TASKS;
-    usingDemo = true;
+    allTasks = DEMO_TASKS; usingDemo = true;
     setStatus('sheet error — showing demo', false);
     document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
     const errEl = document.getElementById('error-msg');
     errEl.style.display = 'block';
-    errEl.textContent = 'Could not load Google Sheet: ' + e.message + '. Showing demo data. See README.md for setup instructions.';
+    errEl.textContent = '⚠ Could not load Google Sheet: ' + e.message + '. Showing demo data.';
     renderAll();
   }
 }
 
 function setStatus(text, live) {
   document.getElementById('status-text').textContent = text;
-  const dot = document.getElementById('status-dot');
-  dot.style.background = live ? 'var(--done)' : 'var(--p2)';
+  document.getElementById('status-dot').style.background = live ? 'var(--done)' : 'var(--p2)';
 }
 
-// ─────────────────────────────────────────────
-//  Render
-// ─────────────────────────────────────────────
+// ── RENDER ────────────────────────────────────────────────────────────────────
 function barColor(t) {
   if (t.phase === 'Phase 2') return 'var(--p2)';
   const s = (t.status||'').toLowerCase();
   if (s.includes('progress')) return 'var(--inprog)';
-  if (s.includes('not')) return 'var(--notstart)';
+  if (s.includes('not'))      return 'var(--notstart)';
   if (s.includes('done')||s.includes('complete')) return 'var(--done)';
   return '#4a566e';
 }
 
 function renderAll() {
-  // Populate filters
-  const funcs = [...new Set(allTasks.map(t=>t.func).filter(Boolean))];
+  const funcs  = [...new Set(allTasks.map(t=>t.func).filter(Boolean))];
   const owners = [...new Set(allTasks.map(t=>t.owner).filter(Boolean))].sort();
-  const funcSel = document.getElementById('funcFilter');
+  const funcSel  = document.getElementById('funcFilter');
   const ownerSel = document.getElementById('ownerFilter');
   const savedFunc = funcSel.value, savedOwner = ownerSel.value;
-  funcSel.innerHTML = '<option value="">all functions</option>' + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
+  funcSel.innerHTML  = '<option value="">all functions</option>'  + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
   ownerSel.innerHTML = '<option value="">all owners</option>' + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
-
   renderTable();
 }
 
 function renderTable() {
-  const selFunc = document.getElementById('funcFilter').value;
+  const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
 
   let tasks = allTasks.filter(t => {
-    if (selFunc && t.func !== selFunc) return false;
+    if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
     if (selOwner && t.owner !== selOwner) return false;
     return true;
   });
 
   // Stats
-  const total = tasks.length;
+  const total  = tasks.length;
   const inProg = tasks.filter(t=>(t.status||'').toLowerCase().includes('progress')).length;
-  const done = tasks.filter(t=>(t.status||'').toLowerCase().includes('done')).length;
-  const ph1 = tasks.filter(t=>t.phase==='Phase 1').length;
+  const done   = tasks.filter(t=>(t.status||'').toLowerCase().includes('done')).length;
+  const ph1    = tasks.filter(t=>t.phase==='Phase 1').length;
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="stat-val">${total}</div><div class="stat-lbl">total tasks</div></div>
     <div class="stat"><div class="stat-val" style="color:var(--inprog)">${inProg}</div><div class="stat-lbl">in progress</div></div>
@@ -620,27 +630,32 @@ function renderTable() {
   `;
 
   // Timeline bounds
-  const allD = tasks.flatMap(t=>[new Date(t.start),new Date(t.end)]);
-  if (!allD.length) { document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td>no tasks match filters</td></tr></tbody></table>'; document.getElementById('loading').style.display='none'; document.getElementById('table-wrap').style.display='block'; return; }
+  const allD = tasks.flatMap(t=>[new Date(t.start),new Date(t.end)]).filter(d=>!isNaN(d));
+  if (!allD.length) {
+    document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td>no tasks match filters</td></tr></tbody></table>';
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('table-wrap').style.display = 'block';
+    return;
+  }
 
   const minD = new Date(Math.min(...allD)); minD.setDate(minD.getDate()-5);
   const maxD = new Date(Math.max(...allD)); maxD.setDate(maxD.getDate()+5);
   const totalMs = maxD - minD;
-  const today = new Date('2026-04-13');
+  const today = new Date();
   const pct = d => Math.max(0, Math.min(100, ((new Date(d)-minD)/totalMs)*100));
 
   // Month ticks
   const ticks = [];
-  let td = new Date(minD); td.setDate(1);
-  while (td <= maxD) {
-    const p = ((td-minD)/totalMs)*100;
-    if (p>=0&&p<=100) ticks.push({label:td.toLocaleDateString('en-US',{month:'short',year:'2-digit'}),p});
-    td.setMonth(td.getMonth()+1);
+  let td2 = new Date(minD); td2.setDate(1);
+  while (td2 <= maxD) {
+    const p = ((td2-minD)/totalMs)*100;
+    if (p>=0&&p<=100) ticks.push({label:td2.toLocaleDateString('en-US',{month:'short',year:'2-digit'}),p});
+    td2.setMonth(td2.getMonth()+1);
   }
-  const todayPct = pct(today.toISOString().substring(0,10));
+  const todayPct = pct(today);
 
   const ticksHTML = `<div style="position:relative;height:22px;min-width:400px">
-    ${ticks.map(t=>`<span class="tick-label" style="left:${t.p}%">${t.label}</span>`).join('')}
+    ${ticks.map(t=>`<span class="tick-label" style="position:absolute;font-size:9px;font-family:var(--mono);color:var(--text3);transform:translateX(-50%);left:${t.p}%;white-space:nowrap">${t.label}</span>`).join('')}
     ${todayPct>=0&&todayPct<=100?`<div style="position:absolute;top:0;bottom:0;left:${todayPct}%;width:1px;background:var(--border2)"></div>`:''}
   </div>`;
 
@@ -652,19 +667,17 @@ function renderTable() {
     <th style="min-width:55px">phase</th>
     <th style="min-width:70px">start</th>
     <th style="min-width:70px">end</th>
-    <th style="min-width:420px;padding-bottom:0">
-      ${ticksHTML}
-    </th>
+    <th style="min-width:420px;padding-bottom:0">${ticksHTML}</th>
   </tr></thead><tbody>`;
 
   funcs.forEach(f => {
     const ft = tasks.filter(t=>t.func===f);
     html += `<tr class="section-row"><td colspan="6"><span>${ft.length}</span>${f}</td></tr>`;
     ft.forEach(t => {
-      const left = pct(t.start);
-      const w = Math.max(0.5, pct(t.end) - left);
+      const left  = pct(t.start);
+      const w     = Math.max(0.5, pct(t.end) - left);
       const color = barColor(t);
-      const fmt = s => new Date(s).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+      const fmt   = s => { const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); };
       html += `<tr>
         <td class="activity-cell">${t.activity}</td>
         <td>${t.owner ? `<span class="owner-pill">${t.owner}</span>` : '<span style="color:var(--text3)">—</span>'}</td>
