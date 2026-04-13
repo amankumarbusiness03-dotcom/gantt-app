@@ -528,17 +528,32 @@ function parseCSV(text) {
     const end   = fixDate(endCol   >= 0 ? cells[endCol]   : '');
     if (!start || !end) continue;
 
+    // Sanitise owner: if it looks like a date or number, discard it
+    let rawOwner = ownerCol >= 0 ? (cells[ownerCol] || '').trim() : '';
+    if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(rawOwner) || /^\d{4}-\d{2}-\d{2}$/.test(rawOwner)) {
+      rawOwner = '';
+    }
+
     tasks.push({
       phase:    phaseCol  >= 0 ? (cells[phaseCol]  || 'Phase 1') : 'Phase 1',
       func,
       activity,
       start,
       end,
-      owner:  ownerCol  >= 0 ? (cells[ownerCol]  || '').trim() : '',
+      owner:  rawOwner,
       status: statusCol >= 0 ? (cells[statusCol] || '').trim() : '',
     });
   }
   return tasks.length ? tasks : null;
+}
+
+// Debug helper — open browser console (F12) to see parsed tasks
+function debugTasks(tasks) {
+  const invalid = tasks.filter(t => !t.start || !t.end || t.start === '' || t.end === '');
+  const phase1  = tasks.filter(t => t.phase === 'Phase 1');
+  console.log(`[RASIC] Total parsed: ${tasks.length} | Phase 1: ${phase1.length} | Invalid dates: ${invalid.length}`);
+  if (invalid.length) console.warn('[RASIC] Tasks with missing dates:', invalid);
+  if (phase1.length) console.log('[RASIC] First 3 Phase 1 tasks:', phase1.slice(0,3));
 }
 
 // ── LOAD ──────────────────────────────────────────────────────────────────────
@@ -561,6 +576,7 @@ async function loadData() {
     const text = await res.text();
     const parsed = parseCSV(text);
     if (!parsed) throw new Error('could not parse sheet — check column names match exactly');
+    debugTasks(parsed);
     allTasks = parsed;
     usingDemo = false;
     setStatus('live', true);
@@ -675,7 +691,7 @@ function renderTable() {
     html += `<tr class="section-row"><td colspan="6"><span>${ft.length}</span>${f}</td></tr>`;
     ft.forEach(t => {
       const left  = pct(t.start);
-      const w     = Math.max(0.5, pct(t.end) - left);
+      const w     = Math.max(1.0, pct(t.end) - left);
       const color = barColor(t);
       const fmt   = s => { const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); };
       html += `<tr>
