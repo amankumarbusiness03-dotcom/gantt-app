@@ -188,6 +188,7 @@ td {
   color: var(--text);
 }
 .bar-col { padding: 5px 10px; min-width: 400px; }
+#zoom-bar button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
 .bar-outer {
   position: relative;
   height: 16px;
@@ -204,25 +205,7 @@ td {
   transition: opacity 0.2s;
 }
 .bar-fill:hover { opacity: 1 !important; }
-.today-line {
-  position: absolute;
-  top: -4px;
-  bottom: -4px;
-  width: 1px;
-  background: var(--today);
-  z-index: 5;
-  opacity: 0.9;
-}
-.today-label {
-  position: absolute;
-  top: -16px;
-  font-size: 8px;
-  font-family: var(--mono);
-  color: var(--today);
-  transform: translateX(-50%);
-  white-space: nowrap;
-  pointer-events: none;
-}
+/* today line rendered inline per chart */
 #loading {
   display: flex;
   flex-direction: column;
@@ -307,6 +290,7 @@ td {
   <div class="leg"><div class="leg-bar" style="background:var(--today);width:2px;height:12px"></div>today</div>
 </div>
 
+<div id="zoom-bar"></div>
 <div class="stats" id="stats"></div>
 
 <div id="loading"><div class="spinner"></div><span>loading from google sheets…</span></div>
@@ -649,6 +633,12 @@ function renderAll() {
   renderTable();
 }
 
+// ── ZOOM LEVELS ───────────────────────────────────────────────────────────────
+// 'overview' = month ticks across full range
+// 'month'    = drill into a specific month, showing week + day ticks
+let zoomMode = 'overview';   // 'overview' | 'month'
+let zoomMonth = null;        // Date object: first day of drilled month
+
 function renderTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
@@ -661,7 +651,6 @@ function renderTable() {
     return true;
   });
 
-  // Stats
   const total  = tasks.length;
   const inProg = tasks.filter(t=>(t.status||'').toLowerCase().includes('progress')).length;
   const done   = tasks.filter(t=>(t.status||'').toLowerCase().includes('done')).length;
@@ -674,69 +663,152 @@ function renderTable() {
     <div class="stat"><div class="stat-val" style="color:var(--p2)">${total-ph1}</div><div class="stat-lbl">phase 2</div></div>
   `;
 
-  // Parse YYYY-MM-DD as LOCAL midnight — avoids UTC timezone shifting bars left
   const parseLocal = s => { if(!s) return null; const [y,m,d]=s.split('-').map(Number); if(!y||!m||!d) return null; return new Date(y,m-1,d); };
+  const fmt = s => { const d = parseLocal(s); return d ? d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) : s; };
 
-  // Timeline bounds
   const allD = tasks.flatMap(t=>[parseLocal(t.start),parseLocal(t.end)]).filter(d=>d&&!isNaN(d));
   if (!allD.length) {
     document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td>no tasks match filters</td></tr></tbody></table>';
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('table-wrap').style.display = 'block';
+    document.getElementById('loading').style.display='none';
+    document.getElementById('table-wrap').style.display='block';
     return;
   }
 
-  const minD = new Date(Math.min(...allD)); minD.setDate(minD.getDate()-5);
-  const maxD = new Date(Math.max(...allD)); maxD.setDate(maxD.getDate()+5);
-  const totalMs = maxD - minD;
   const today = new Date();
-  const pct = s => { const d = parseLocal(s); if(!d) return 0; return Math.max(0, Math.min(100, ((d-minD)/totalMs)*100)); };
 
-  // Month ticks
-  const ticks = [];
-  let td2 = new Date(minD); td2.setDate(1);
-  while (td2 <= maxD) {
-    const p = ((td2-minD)/totalMs)*100;
-    if (p>=0&&p<=100) ticks.push({label:td2.toLocaleDateString('en-US',{month:'short',year:'2-digit'}),p});
-    td2.setMonth(td2.getMonth()+1);
+  // ── Determine timeline window ────────────────────────────────────────────────
+  let minD, maxD;
+  if (zoomMode === 'month' && zoomMonth) {
+    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
+    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0); // last day of month
+    // filter tasks to only those that overlap this month
+    tasks = tasks.filter(t => {
+      const s = parseLocal(t.start), e = parseLocal(t.end);
+      return s && e && s <= maxD && e >= minD;
+    });
+  } else {
+    const globalMin = new Date(Math.min(...allD));
+    const globalMax = new Date(Math.max(...allD));
+    minD = new Date(globalMin); minD.setDate(minD.getDate()-3);
+    maxD = new Date(globalMax); maxD.setDate(maxD.getDate()+3);
   }
+
+  const totalMs = maxD - minD;
+  const pct = s => { const d = parseLocal(s); if(!d) return 0; return Math.max(0, Math.min(100, ((d-minD)/totalMs)*100)); };
   const todayPct = Math.max(0, Math.min(100, ((today-minD)/totalMs)*100));
 
-  const ticksHTML = `<div style="position:relative;height:22px;min-width:400px">
-    ${ticks.map(t=>`<span class="tick-label" style="position:absolute;font-size:9px;font-family:var(--mono);color:var(--text3);transform:translateX(-50%);left:${t.p}%;white-space:nowrap">${t.label}</span>`).join('')}
-    ${todayPct>=0&&todayPct<=100?`<div style="position:absolute;top:0;bottom:0;left:${todayPct}%;width:1px;background:var(--border2)"></div>`:''}
+  // ── Build ticks ──────────────────────────────────────────────────────────────
+  let majorTicks = []; // { label, p, isMonth }
+  let minorTicks = []; // week lines in month zoom
+
+  if (zoomMode === 'month' && zoomMonth) {
+    // Major ticks = each day of month
+    const daysInMonth = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      const p = ((dt-minD)/totalMs)*100;
+      const isWeekStart = dt.getDay() === 1; // Monday
+      majorTicks.push({ label: String(d), p, bold: isWeekStart });
+    }
+    // Week separator lines at Mondays
+    minorTicks = majorTicks.filter(t=>t.bold);
+  } else {
+    // Major ticks = each month boundary
+    let td2 = new Date(minD.getFullYear(), minD.getMonth(), 1);
+    while (td2 <= maxD) {
+      const p = ((td2-minD)/totalMs)*100;
+      if (p >= -2 && p <= 102) {
+        majorTicks.push({ label: td2.toLocaleDateString('en-US',{month:'short', year:'2-digit'}), p });
+      }
+      td2.setMonth(td2.getMonth()+1);
+    }
+  }
+
+  // ── Zoom control bar ─────────────────────────────────────────────────────────
+  let zoomBarHTML = '';
+  if (zoomMode === 'overview') {
+    // Show clickable month chips along the header
+    const months = [];
+    let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
+    const endMo = new Date(Math.max(...allD));
+    while (td3 <= endMo) {
+      months.push(new Date(td3));
+      td3.setMonth(td3.getMonth()+1);
+    }
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 28px;border-bottom:1px solid var(--border);flex-wrap:wrap;background:var(--surface2)">
+      <span style="font-size:10px;font-family:var(--mono);color:var(--text3);margin-right:4px">drill into month →</span>
+      ${months.map(m=>{
+        const label = m.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+        const isToday = today.getMonth()===m.getMonth()&&today.getFullYear()===m.getFullYear();
+        return `<button onclick="drillMonth(new Date(${m.getFullYear()},${m.getMonth()},1))" style="background:${isToday?'rgba(247,95,95,0.15)':'var(--surface)'};border:1px solid ${isToday?'var(--today)':'var(--border2)'};color:${isToday?'var(--today)':'var(--text2)'};font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">${label}</button>`;
+      }).join('')}
+    </div>`;
+  } else {
+    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
+      <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">← overview</button>
+      <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} — day-level view</span>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
+    </div>`;
+  }
+
+  // ── Header tick row ──────────────────────────────────────────────────────────
+  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+    ${majorTicks.map(t=>`<span style="position:absolute;font-size:${zoomMode==='month'?'9px':'9px'};font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
   </div>`;
 
+  // ── Build table ──────────────────────────────────────────────────────────────
   const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
   let html = `<table>
   <thead><tr>
-    <th style="min-width:190px">activity</th>
-    <th style="min-width:70px">owner</th>
-    <th style="min-width:55px">phase</th>
-    <th style="min-width:70px">start</th>
-    <th style="min-width:70px">end</th>
-    <th style="min-width:420px;padding-bottom:0">${ticksHTML}</th>
+    <th style="min-width:200px">activity</th>
+    <th style="min-width:72px">owner</th>
+    <th style="min-width:58px">phase</th>
+    <th style="min-width:68px">start</th>
+    <th style="min-width:68px">end</th>
+    <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0">${ticksHTML}</th>
   </tr></thead><tbody>`;
 
   funcs.forEach(f => {
     const ft = tasks.filter(t=>t.func===f);
+    if (!ft.length) return;
     html += `<tr class="section-row"><td colspan="6"><span>${ft.length}</span>${f}</td></tr>`;
     ft.forEach(t => {
-      const left  = pct(t.start);
-      const w     = Math.max(1.0, pct(t.end) - left);
+      const sDate = parseLocal(t.start);
+      const eDate = parseLocal(t.end);
+      // Clamp to window
+      const clampedStart = sDate < minD ? minD : sDate;
+      const clampedEnd   = eDate > maxD ? maxD : eDate;
+      const left = Math.max(0, Math.min(99, ((clampedStart-minD)/totalMs)*100));
+      const right= Math.min(100,           ((clampedEnd  -minD)/totalMs)*100);
+      const w    = Math.max(0.6, right - left);
       const color = barColor(t);
-      const fmt   = s => { const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); };
+
+      // Month grid lines (overview) or day lines (month zoom)
+      const gridLines = majorTicks.map(tk =>
+        `<div style="position:absolute;top:0;bottom:0;left:${tk.p}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+      ).join('');
+
+      // Today line — ONE per chart, drawn on bar-outer — only if today is in window
+      const todayLine = (todayPct>=0 && todayPct<=100)
+        ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+        : '';
+
+      // Tooltip with exact dates
+      const tip = `${t.activity} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+t.owner:''}`;
+
       html += `<tr>
         <td class="activity-cell">${t.activity}</td>
-        <td>${t.owner ? `<span class="owner-pill">${t.owner}</span>` : '<span style="color:var(--text3)">—</span>'}</td>
+        <td>${t.owner?`<span class="owner-pill">${t.owner}`+'</span>':'<span style="color:var(--text3)">—</span>'}</td>
         <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${t.phase}</span></td>
         <td class="date-cell">${fmt(t.start)}</td>
         <td class="date-cell">${fmt(t.end)}</td>
         <td class="bar-col">
           <div class="bar-outer">
-            ${ticks.map(tk=>`<div style="position:absolute;top:0;bottom:0;left:${tk.p}%;width:1px;background:var(--border);pointer-events:none"></div>`).join('')}
-            <div class="bar-fill" style="left:${left}%;width:${w}%;background:${color};opacity:0.82" title="${t.activity} | ${fmt(t.start)} → ${fmt(t.end)}"></div>
-            ${todayPct>=0&&todayPct<=100?`<div class="today-line" style="left:${todayPct}%"><span class="today-label">today</span></div>`:''}
+            ${gridLines}
+            <div class="bar-fill" style="left:${left}%;width:${w}%;background:${color};opacity:0.85" title="${tip}"></div>
+            ${todayLine}
           </div>
         </td>
       </tr>`;
@@ -744,9 +816,24 @@ function renderTable() {
   });
   html += `</tbody></table>`;
 
+  // Inject zoom bar + table
+  const zoomEl = document.getElementById('zoom-bar');
+  if (zoomEl) zoomEl.innerHTML = zoomBarHTML;
   document.getElementById('loading').style.display = 'none';
   document.getElementById('table-wrap').style.display = 'block';
   document.getElementById('table-wrap').innerHTML = html;
+}
+
+function drillMonth(date) {
+  zoomMode = 'month';
+  zoomMonth = date;
+  renderTable();
+}
+
+function drillBack() {
+  zoomMode = 'overview';
+  zoomMonth = null;
+  renderTable();
 }
 
 // Wire filters
