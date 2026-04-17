@@ -15,14 +15,14 @@
   --text: #e8eaf0;
   --text2: #8b90a0;
   --text3: #555b6e;
-  --accent: #4f8ef7;
-  --accent2: #2d5fd4;
-  --p1: #4f8ef7;
-  --p2: #e8a84a;
-  --inprog: #4f8ef7;
+  --accent: #8b9cf7;          /* lavender — section headers, UI chrome */
+  --accent2: #6070d4;
+  --p1: #3fb8c8;              /* cyan — Phase 1 badges */
+  --p2: #b06edb;              /* purple — Phase 2 badges */
+  --inprog: #4f8ef7;          /* blue — in-progress bars only */
   --notstart: #555b6e;
-  --done: #3dba7f;
-  --today: #f75f5f;
+  --done: #3dba7f;            /* green — done bars */
+  --today: #ff7043;           /* coral — today line (distinct from overdue red) */
   --mono: 'IBM Plex Mono', monospace;
   --sans: 'IBM Plex Sans', sans-serif;
 }
@@ -163,8 +163,9 @@ td {
   white-space: nowrap;
   letter-spacing: 0.04em;
 }
-.p1b { background: rgba(79,142,247,0.12); color: #7eb0ff; border: 1px solid rgba(79,142,247,0.25); }
-.p2b { background: rgba(232,168,74,0.12); color: #f0be72; border: 1px solid rgba(232,168,74,0.25); }
+/* Phase 1 = cyan, Phase 2 = purple — both distinct from blue in-progress bars */
+.p1b { background: rgba(63,184,200,0.12); color: #5dd4e0; border: 1px solid rgba(63,184,200,0.28); }
+.p2b { background: rgba(176,110,219,0.12); color: #c990f0; border: 1px solid rgba(176,110,219,0.28); }
 .owner-pill {
   font-family: var(--mono);
   font-size: 10px;
@@ -258,11 +259,13 @@ td {
 
 /* ── RAG colors ── */
 :root {
-  --rag-red:   #e05454;
-  --rag-amber: #e8a84a;
-  --rag-green: #3dba7f;
-  --rag-blue:  #4f8ef7;
-  --rag-grey:  #4a566e;
+  --rag-red:   #e05454;   /* overdue — red */
+  --rag-amber: #f0924a;   /* at risk — orange (distinct from gold milestone) */
+  --rag-green: #3dba7f;   /* done — green */
+  --rag-blue:  #4f8ef7;   /* in progress — blue */
+  --rag-grey:  #4a566e;   /* not started — slate */
+  --ms-gold:   #ffd864;   /* milestone gate flag — bright gold */
+  --ms-diamond:#ffe4a0;   /* task milestone diamond — pale gold */
 }
 
 /* ── Milestone marker ── */
@@ -348,6 +351,28 @@ td {
 /* ── RAG stat cards ── */
 .stat.rag-red   { border-color: rgba(224,84,84,0.4); }
 .stat.rag-amber { border-color: rgba(232,168,74,0.3); }
+
+/* ── Task milestone toggle ── */
+.task-ms-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text3);
+  cursor: pointer;
+  margin-right: 5px;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: color 0.15s, text-shadow 0.15s;
+  user-select: none;
+  flex-shrink: 0;
+}
+.task-ms-btn:hover { color: rgba(255,220,100,0.6); }
+.task-ms-btn.ms-active {
+  color: rgba(255,220,100,0.95);
+  text-shadow: 0 0 6px rgba(255,220,100,0.5);
+}
 </style>
 </head>
 <body>
@@ -381,11 +406,22 @@ td {
   <div class="leg"><div class="leg-bar" style="background:var(--rag-amber)"></div>at risk (≤3 days)</div>
   <div class="leg"><div class="leg-bar" style="background:var(--rag-red)"></div>overdue</div>
   <div class="leg"><div class="leg-bar" style="background:var(--rag-grey)"></div>not started</div>
+  <div class="leg"><div class="leg-bar" style="background:var(--p1)"></div>phase 1</div>
   <div class="leg"><div class="leg-bar" style="background:var(--p2)"></div>phase 2</div>
   <div class="leg"><div class="leg-bar" style="background:var(--today);width:2px;height:12px"></div>today</div>
-  <div class="leg"><div class="leg-bar" style="border-left:2px dashed rgba(255,220,100,0.7);width:2px;height:12px;background:none"></div>milestone gate</div>
+  <div class="leg"><svg width="10" height="12" viewBox="0 0 10 12" style="flex-shrink:0"><line x1="2" y1="0" x2="2" y2="12" stroke="var(--ms-gold)" stroke-width="1.5"/><polygon points="2,1 10,5 2,9" fill="var(--ms-gold)"/></svg>milestone gate</div>
+  <div class="leg"><span style="display:inline-block;width:9px;height:9px;background:var(--ms-diamond);transform:rotate(45deg);box-shadow:0 0 5px rgba(255,228,160,0.4);flex-shrink:0;"></span>task milestone</div>
 </div>
 
+<div id="milestone-panel" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
+  <span style="font-size:10px;font-family:var(--mono);color:var(--text3);flex-shrink:0">milestones ▸</span>
+  <span id="ms-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
+  <span style="display:inline-flex;align-items:center;gap:4px;margin-left:4px">
+    <input id="ms-name" type="text" placeholder="name" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;width:110px;outline:none"/>
+    <input id="ms-date" type="date" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;outline:none"/>
+    <button data-action="add-ms" style="background:rgba(255,220,100,0.1);border:1px solid rgba(255,220,100,0.4);color:rgba(255,220,100,0.9);font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:4px;cursor:pointer">+ add</button>
+  </span>
+</div>
 <div id="zoom-bar"></div>
 <div class="stats" id="stats"></div>
 
@@ -559,9 +595,9 @@ function fixDate(s) {
     return `${monSpace[3]}-${mo}-${monSpace[2].padStart(2,'0')}`;
   }
 
-  // Last resort — let the browser try, but only accept clean YYYY-MM-DD output
-  const d = new Date(s);
-  if (!isNaN(d)) return d.toISOString().substring(0,10);
+  // Last resort — parse as local time to avoid UTC midnight shift
+  const d = new Date(s + 'T00:00:00');
+  if (!isNaN(d)) { const y=d.getFullYear(),mo=String(d.getMonth()+1).padStart(2,'0'),dy=String(d.getDate()).padStart(2,'0'); return `${y}-${mo}-${dy}`; }
 
   return '';
 }
@@ -708,38 +744,105 @@ function setStatus(text, live) {
   document.getElementById('status-dot').style.background = live ? 'var(--done)' : 'var(--p2)';
 }
 
-// ── MILESTONES (hard gates) ───────────────────────────────────────────────────
-// Add / edit these as your project gates change. date: 'YYYY-MM-DD', label: short name
-const MILESTONES = [
+// ── MILESTONES — mutable, user-configurable ──────────────────────────────────
+const DEFAULT_MILESTONES = [
   { date: '2026-04-30', label: 'Regulatory Deadline' },
   { date: '2026-06-15', label: 'Machines In' },
   { date: '2026-08-15', label: 'FAI Done' },
   { date: '2026-10-31', label: 'PPAP Submit' },
 ];
+let milestones = DEFAULT_MILESTONES.map(m => ({...m}));
 
-// ── ACCORDION STATE ───────────────────────────────────────────────────────────
-const collapsedFuncs = new Set(); // stores collapsed function names
+function getMilestones() { return milestones.length ? milestones : DEFAULT_MILESTONES.map(m=>({...m})); }
 
-function toggleFunc(funcName) {
-  if (collapsedFuncs.has(funcName)) collapsedFuncs.delete(funcName);
-  else collapsedFuncs.add(funcName);
+function addMilestone() {
+  const label = document.getElementById('ms-name').value.trim();
+  const date  = document.getElementById('ms-date').value.trim();
+  if (!label || !date) return;
+  milestones.push({ label, date });
+  milestones.sort((a,b)=>a.date.localeCompare(b.date));
+  document.getElementById('ms-name').value = '';
+  document.getElementById('ms-date').value = '';
+  renderMilestoneList();
   renderTable();
 }
 
-// ── RAG LOGIC ─────────────────────────────────────────────────────────────────
+function deleteMilestone(idx) {
+  milestones.splice(idx, 1);
+  renderMilestoneList();
+  renderTable();
+}
+
+function editMilestone(idx) {
+  const m = milestones[idx];
+  const newLabel = prompt('Milestone name:', m.label);
+  if (newLabel === null) return;
+  const newDate  = prompt('Date (YYYY-MM-DD):', m.date);
+  if (newDate === null) return;
+  milestones[idx] = { label: newLabel.trim() || m.label, date: newDate.trim() || m.date };
+  milestones.sort((a,b)=>a.date.localeCompare(b.date));
+  renderMilestoneList();
+  renderTable();
+}
+
+function renderMilestoneList() {
+  const list = document.getElementById('ms-list');
+  if (!list) return;
+  const ms = getMilestones();
+  list.innerHTML = ms.map((m,i) => `
+    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,220,100,0.08);border:1px solid rgba(255,220,100,0.3);border-radius:4px;padding:2px 6px;font-size:10px;font-family:var(--mono);color:rgba(255,220,100,0.9)">
+      ${m.label} <span style="color:var(--text3)">${m.date}</span>
+      <button data-action="edit-ms" data-idx="${i}" style="background:none;border:none;color:var(--text3);cursor:pointer;padding:0 2px;font-size:10px" title="edit">✎</button>
+      <button data-action="del-ms" data-idx="${i}" style="background:none;border:none;color:var(--rag-red);cursor:pointer;padding:0 2px;font-size:10px" title="delete">✕</button>
+    </span>
+  `).join('');
+}
+
+// ── ACCORDION STATE — toggle without re-render ────────────────────────────────
+const collapsedFuncs = new Set();
+
+function toggleFunc(funcName, tdEl) {
+  const rowEl = tdEl.parentElement; // <tr>
+  if (collapsedFuncs.has(funcName)) {
+    collapsedFuncs.delete(funcName);
+    rowEl.classList.remove('collapsed');
+    const toggle = rowEl.querySelector('.section-toggle');
+    if (toggle) toggle.textContent = '▼';
+    let sib = rowEl.nextElementSibling;
+    while (sib && !sib.classList.contains('section-row') && !sib.classList.contains('milestone-bar-row')) {
+      sib.style.display = '';
+      sib = sib.nextElementSibling;
+    }
+  } else {
+    collapsedFuncs.add(funcName);
+    rowEl.classList.add('collapsed');
+    const toggle = rowEl.querySelector('.section-toggle');
+    if (toggle) toggle.textContent = '▶';
+    let sib = rowEl.nextElementSibling;
+    while (sib && !sib.classList.contains('section-row') && !sib.classList.contains('milestone-bar-row')) {
+      sib.style.display = 'none';
+      sib = sib.nextElementSibling;
+    }
+  }
+}
+
+// ── RAG LOGIC — single source of truth ───────────────────────────────────────
 function ragStatus(t) {
   const parseLocal = s => { if(!s) return null; const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
   const today = new Date(); today.setHours(0,0,0,0);
-  const status = (t.status||'').toLowerCase();
-  const endDate = parseLocal(t.end);
+  const status = (t.status||'').toLowerCase().trim();
+  const endDate   = parseLocal(t.end);
+  const startDate = parseLocal(t.start);
   if (!endDate) return 'grey';
-  if (status.includes('done') || status.includes('complete')) return 'green';
-  if (t.phase === 'Phase 2') return 'phase2';
-  const msLeft = endDate - today;
-  const daysLeft = msLeft / 86400000;
-  if (msLeft < 0) return 'red';           // overdue — past end date, not done
-  if (daysLeft <= 3 && !status.includes('progress')) return 'amber'; // due very soon, not started
-  if (status.includes('progress')) return 'blue';
+  // done
+  if (status === 'done' || status.includes('complete')) return 'green';
+  // in_progress
+  if (status === 'in_progress' || status.includes('progress')) return 'blue';
+  // overdue: end < today AND not done
+  if (endDate < today) return 'red';
+  // atRisk: start <= today+3 AND status is not_started (or empty)
+  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
+  if (startDate && startDate <= today3) return 'amber';
   return 'grey';
 }
 
@@ -752,11 +855,36 @@ function ragClass(rag) {
   return rag === 'red' ? 'rag-red' : rag === 'amber' ? 'rag-amber' : '';
 }
 
-// ── OWNER CLICK-FILTER ────────────────────────────────────────────────────────
+// ── OWNER FILTER — global state, pill-click toggle ───────────────────────────
+let activeOwner = '';
+
 function filterByOwner(name) {
+  activeOwner = (activeOwner === name) ? '' : name;
   const sel = document.getElementById('ownerFilter');
-  sel.value = (sel.value === name) ? '' : name; // toggle off if same
+  if (sel) sel.value = activeOwner;
   renderTable();
+}
+
+// ── TASK-LINKED MILESTONES — per-row diamond at task end date ─────────────────
+// Key format: "func::activity" — stable across re-renders
+const taskMilestones = new Set();
+
+function toggleTaskMilestone(key, btnEl) {
+  if (taskMilestones.has(key)) {
+    taskMilestones.delete(key);
+    btnEl.classList.remove('ms-active');
+    btnEl.title = 'Mark as milestone';
+    // Hide diamond in this row
+    const row = btnEl.closest('tr');
+    if (row) { const d = row.querySelector('.task-ms-diamond'); if (d) d.style.display = 'none'; }
+  } else {
+    taskMilestones.add(key);
+    btnEl.classList.add('ms-active');
+    btnEl.title = 'Remove milestone';
+    // Show diamond in this row
+    const row = btnEl.closest('tr');
+    if (row) { const d = row.querySelector('.task-ms-diamond'); if (d) d.style.display = ''; }
+  }
 }
 
 // ── RENDER ALL ────────────────────────────────────────────────────────────────
@@ -779,19 +907,23 @@ function renderTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
+  // Keep activeOwner in sync with dropdown
+  if (selOwner !== activeOwner) activeOwner = selOwner;
 
   let tasks = allTasks.filter(t => {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
-    if (selOwner && t.owner !== selOwner) return false;
+    if (activeOwner && t.owner !== activeOwner) return false;
     return true;
   });
+  // Compute RAG once per task
+  tasks = tasks.map(t => ({ ...t, _rag: ragStatus(t) }));
 
-  // ── RAG stats ─────────────────────────────────────────────────────────────
-  const total   = tasks.length;
-  const redCount   = tasks.filter(t => ragStatus(t) === 'red').length;
-  const amberCount = tasks.filter(t => ragStatus(t) === 'amber').length;
-  const doneCount  = tasks.filter(t => ragStatus(t) === 'green').length;
+  // ── RAG stats — use pre-computed _rag ─────────────────────────────────────
+  const total      = tasks.length;
+  const redCount   = tasks.filter(t => t._rag === 'red').length;
+  const amberCount = tasks.filter(t => t._rag === 'amber').length;
+  const doneCount  = tasks.filter(t => t._rag === 'green').length;
   const ph1        = tasks.filter(t => t.phase === 'Phase 1').length;
 
   document.getElementById('stats').innerHTML = `
@@ -855,7 +987,7 @@ function renderTable() {
   }
 
   // ── Milestones in current window ───────────────────────────────────────────
-  const visibleMilestones = MILESTONES.map(m => {
+  const visibleMilestones = getMilestones().map(m => {
     const d = parseLocal(m.date);
     if (!d) return null;
     const p = pctOf(d);
@@ -892,16 +1024,26 @@ function renderTable() {
     ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
   </div>`;
 
-  // ── Milestone banner (spans full chart width, above table body) ─────────────
-  const milestoneBarHTML = visibleMilestones.length ? `
-    <tr class="milestone-bar-row"><td colspan="6" style="padding:0;border-bottom:1px solid var(--border)">
-      <div class="milestone-bar">
-        ${visibleMilestones.map(m=>`
-          <div class="milestone-line" style="left:${m.p.toFixed(2)}%"></div>
-          <span class="milestone-label" style="left:${m.p.toFixed(2)}%">${m.label}</span>
-        `).join('')}
-      </div>
-    </td></tr>` : '';
+  // ── Flag pins: positioned inside bar-col <th> only ────────────────────────
+  // Stagger odd-indexed flags 8px lower so close labels don't collide
+  const flagsHTML = visibleMilestones.length ? `
+    <div style="position:relative;height:34px;overflow:visible;">
+      ${visibleMilestones.map((m, i) => {
+        const yo = (i % 2 === 0) ? 0 : 9;
+        const poleH = 34 - yo;
+        const lbl = m.label.length > 13 ? m.label.slice(0,12)+'\u2026' : m.label;
+        return `<div style="position:absolute;left:${m.p.toFixed(2)}%;top:${yo}px;transform:translateX(-1.5px);z-index:12;pointer-events:none;" title="${m.label} \u2014 ${m.date}">
+          <svg width="14" height="${poleH}" viewBox="0 0 14 ${poleH}" style="display:block;overflow:visible;">
+            <line x1="2" y1="0" x2="2" y2="${poleH}" stroke="rgba(255,220,100,0.72)" stroke-width="1.5"/>
+            <polygon points="2,2 14,7 2,12" fill="rgba(255,220,100,0.92)"/>
+          </svg>
+          <span style="position:absolute;top:1px;left:17px;font-size:7.5px;font-family:var(--mono);color:rgba(255,220,100,0.88);white-space:nowrap;letter-spacing:0.04em;">${lbl}</span>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  // Old milestone banner row removed — flag pins in <th> replace it
+  const milestoneBarHTML = '';
 
   // ── Table ──────────────────────────────────────────────────────────────────
   const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
@@ -913,7 +1055,7 @@ function renderTable() {
       <th style="min-width:58px">phase</th>
       <th style="min-width:68px">start</th>
       <th style="min-width:68px">end</th>
-      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0">${ticksHTML}</th>
+      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>
   ${milestoneBarHTML}`;
@@ -923,18 +1065,18 @@ function renderTable() {
     if (!ft.length) return;
     const isCollapsed = collapsedFuncs.has(f);
 
-    // Section RAG summary — worst state in group
-    const states = ft.map(t => ragStatus(t));
-    const grpRed   = states.filter(s=>s==='red').length;
-    const grpAmber = states.filter(s=>s==='amber').length;
+    // Section RAG summary — use pre-computed _rag
+    const grpRed   = ft.filter(t=>t._rag==='red').length;
+    const grpAmber = ft.filter(t=>t._rag==='amber').length;
     const ragSummary = grpRed
       ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${grpRed} overdue</span>`
       : grpAmber
       ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">● ${grpAmber} at risk</span>`
       : '';
 
-    html += `<tr class="section-row${isCollapsed?' collapsed':''}" onclick="toggleFunc(${JSON.stringify(f)})">
-      <td colspan="6">
+    // Section row — data-action attribute, handled by delegated listener
+    html += `<tr class="section-row${isCollapsed?' collapsed':''}">
+      <td colspan="6" data-action="toggle-func" data-func='${f.replace(/\x27/g,"&#39;")}' style="cursor:pointer">
         <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
         <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
         ${f}
@@ -942,59 +1084,65 @@ function renderTable() {
       </td>
     </tr>`;
 
-    if (!isCollapsed) {
-      ft.forEach(t => {
-        const sDate = parseLocal(t.start);
-        const eDate = parseLocal(t.end);
-        if (!sDate || !eDate) return;
-        const clampedStart = sDate < minD ? minD : sDate;
-        const clampedEnd   = eDate > maxD ? maxD : eDate;
-        const left  = pctOf(clampedStart);
-        const right = pctOf(clampedEnd);
-        const w     = Math.max(0.6, right - left);
+    ft.forEach(t => {
+      const sDate = parseLocal(t.start);
+      const eDate = parseLocal(t.end);
+      if (!sDate || !eDate) return;
+      const clampedStart = sDate < minD ? minD : sDate;
+      const clampedEnd   = eDate > maxD ? maxD : eDate;
+      const left  = pctOf(clampedStart);
+      const right = pctOf(clampedEnd);
+      const w     = Math.max(0.6, right - left);
 
-        const rag   = ragStatus(t);
-        const color = ragColor(rag);
-        const rClass = ragClass(rag);
+      const rag    = t._rag;
+      const color  = ragColor(rag);
+      const rClass = ragClass(rag);
 
-        // Grid lines
-        const gridLines = majorTicks.map(tk =>
-          `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
-        ).join('');
+      // Grid lines
+      const gridLines = majorTicks.map(tk =>
+        `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+      ).join('');
 
-        // Milestone lines on every bar row
-        const mLines = visibleMilestones.map(m =>
-          `<div style="position:absolute;top:-2px;bottom:-2px;left:${m.p.toFixed(2)}%;width:0;border-left:2px dashed rgba(255,220,100,0.5);z-index:8;pointer-events:none"></div>`
-        ).join('');
+      // Milestone pole lines — solid thin gold, continuation of the flag’s pole
+      const mLines = visibleMilestones.map(m =>
+        `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
+      ).join('');
 
-        // Today line
-        const todayLine = (todayPct>=0 && todayPct<=100)
-          ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
-          : '';
+      // Today line
+      const todayLine = (todayPct>=0 && todayPct<=100)
+        ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+        : '';
 
-        const tip = `${t.activity} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+t.owner:''}`;
-        const activeOwner = document.getElementById('ownerFilter').value;
-        const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
+      const tip = `${t.activity} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+t.owner:''}`;
+      const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
 
-        html += `<tr>
-          <td class="activity-cell">${t.activity}</td>
-          <td>${t.owner
-            ? `<span class="owner-pill${ownerActive}" onclick="event.stopPropagation();filterByOwner(${JSON.stringify(t.owner)})" title="click to filter by ${t.owner}">${t.owner}</span>`
-            : '<span style="color:var(--text3)">—</span>'}</td>
-          <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${t.phase}</span></td>
-          <td class="date-cell">${fmt(t.start)}</td>
-          <td class="date-cell">${fmt(t.end)}</td>
-          <td class="bar-col">
-            <div class="bar-outer">
-              ${gridLines}
-              ${mLines}
-              <div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>
-              ${todayLine}
-            </div>
-          </td>
-        </tr>`;
-      });
-    }
+      // Task-linked milestone state
+      const msKey = `${t.func}::${t.activity}`;
+      const isTaskMs = taskMilestones.has(msKey);
+      // Diamond at end-date position inside bar-outer
+      const endPct = pctOf(clampedEnd);
+      const taskDiamond = `<div class="task-ms-diamond" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;pointer-events:none;box-shadow:0 0 7px rgba(255,220,100,0.55);"></div>`;
+
+      html += `<tr${isCollapsed?' style="display:none"':''}>
+        <td class="activity-cell">
+          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${msKey.replace(/"/g,'&quot;')}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${t.activity}</td>
+        <td>${t.owner
+          ? `<span class="owner-pill${ownerActive}" data-action="filter-owner" data-owner="${t.owner}" title="click to filter by ${t.owner}">${t.owner}</span>`
+          : '<span style="color:var(--text3)">—</span>'}</td>
+        <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${t.phase}</span></td>
+        <td class="date-cell">${fmt(t.start)}</td>
+        <td class="date-cell">${fmt(t.end)}</td>
+        <td class="bar-col">
+          <div class="bar-outer">
+            ${gridLines}
+            ${mLines}
+            <div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>
+            ${todayLine}
+            ${taskDiamond}
+          </div>
+        </td>
+      </tr>`;
+    });
   });
 
   html += `</tbody></table>`;
@@ -1013,11 +1161,43 @@ function drillBack()       { zoomMode = 'overview'; zoomMonth = null; renderTabl
 ['funcFilter','phaseFilter','ownerFilter'].forEach(id => {
   document.getElementById(id).addEventListener('change', renderTable);
 });
+// Sync ownerFilter dropdown -> activeOwner state
+document.getElementById('ownerFilter').addEventListener('change', function() {
+  activeOwner = this.value;
+});
+
+// ── Single global delegated listener on document.body (stable, survives re-renders) ──
+document.body.addEventListener('click', function(e) {
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const action = el.dataset.action;
+
+  if (action === 'add-ms') {
+    addMilestone();
+
+  } else if (action === 'del-ms') {
+    deleteMilestone(parseInt(el.dataset.idx, 10));
+
+  } else if (action === 'edit-ms') {
+    editMilestone(parseInt(el.dataset.idx, 10));
+
+  } else if (action === 'filter-owner') {
+    e.stopPropagation();
+    filterByOwner(el.dataset.owner);
+
+  } else if (action === 'toggle-func') {
+    toggleFunc(el.dataset.func, el);
+
+  } else if (action === 'toggle-task-ms') {
+    toggleTaskMilestone(el.dataset.key, el);
+  }
+});
 
 // Auto-refresh every 5 minutes
 setInterval(loadData, 5 * 60 * 1000);
 
 loadData();
+renderMilestoneList();
 </script>
 </body>
 </html>
