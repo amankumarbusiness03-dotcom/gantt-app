@@ -608,11 +608,11 @@ function fixDate(s) {
     return `${spaceMon[3]}-${mo}-${spaceMon[1].padStart(2,'0')}`;
   }
 
-  // Mon DD YYYY  e.g. "Mar 20 2026"
-  const monSpace = s.match(/^([A-Za-z]+)\s+(\d{1,2})\s+(\d{4})$/);
-  if (monSpace) {
-    const mo = monthNum(monSpace[1]); if (!mo) return '';
-    return `${monSpace[3]}-${mo}-${monSpace[2].padStart(2,'0')}`;
+  // Mon DD, YYYY  e.g. "Mar 20, 2026" or "March 20, 2026"  ← Google Sheets default
+  const monComma = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (monComma) {
+    const mo = monthNum(monComma[1]); if (!mo) return '';
+    return `${monComma[3]}-${mo}-${monComma[2].padStart(2,'0')}`;
   }
 
   // Mon-DD-YYYY e.g. "Mar-20-2026"
