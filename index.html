@@ -373,6 +373,163 @@ td {
   color: rgba(255,220,100,0.95);
   text-shadow: 0 0 6px rgba(255,220,100,0.5);
 }
+
+/* ── Collapsible milestone panel ── */
+.ms-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.ms-panel-header:hover {
+  background: #252b3d;
+}
+.ms-panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ms-panel-title {
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--text3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ms-panel-count {
+  font-size: 9px;
+  font-family: var(--mono);
+  color: rgba(255,220,100,0.85);
+  background: rgba(255,220,100,0.1);
+  border: 1px solid rgba(255,220,100,0.25);
+  border-radius: 10px;
+  padding: 1px 7px;
+  min-width: 18px;
+  text-align: center;
+}
+.ms-panel-chevron {
+  font-size: 10px;
+  color: var(--text3);
+  transition: transform 0.25s ease;
+}
+.ms-panel-header.expanded .ms-panel-chevron {
+  transform: rotate(180deg);
+}
+.ms-panel-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.25s ease;
+  opacity: 0;
+  background: var(--surface2);
+  border-bottom: 1px solid transparent;
+  padding: 0 28px;
+}
+.ms-panel-body.open {
+  max-height: 200px;
+  opacity: 1;
+  padding: 8px 28px;
+  border-bottom-color: var(--border);
+}
+.ms-panel-body-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Milestone tooltip ── */
+.ms-tooltip {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  max-width: 300px;
+  min-width: 200px;
+}
+.ms-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.ms-tooltip-card {
+  background: rgba(24, 28, 39, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 220, 100, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 12px rgba(255,220,100,0.08);
+}
+.ms-tooltip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,220,100,0.95);
+  margin-bottom: 8px;
+}
+.ms-tooltip-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 6px 0 8px;
+}
+.ms-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text2);
+  margin-bottom: 4px;
+}
+.ms-tooltip-row:last-child { margin-bottom: 0; }
+.ms-tooltip-row .label { color: var(--text3); min-width: 65px; }
+.ms-tooltip-row .value { color: var(--text); }
+.ms-tooltip-row .value.red { color: var(--rag-red); }
+.ms-tooltip-row .value.amber { color: var(--rag-amber); }
+.ms-tooltip-row .value.green { color: var(--rag-green); }
+.ms-tooltip-row .value.blue { color: var(--rag-blue); }
+.ms-tooltip-row .value.grey { color: var(--text3); }
+.ms-tooltip-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-family: var(--mono);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.ms-tooltip-badge.overdue { background: rgba(224,84,84,0.15); color: var(--rag-red); border: 1px solid rgba(224,84,84,0.3); }
+.ms-tooltip-badge.at-risk { background: rgba(240,146,74,0.12); color: var(--rag-amber); border: 1px solid rgba(240,146,74,0.25); }
+.ms-tooltip-badge.on-track { background: rgba(61,186,127,0.12); color: var(--rag-green); border: 1px solid rgba(61,186,127,0.25); }
+
+/* ── Hoverable flag & diamond ── */
+.ms-flag-hit {
+  cursor: pointer;
+}
+.ms-flag-hit:hover svg polygon {
+  fill: rgba(255,220,100,1);
+}
+.ms-flag-hit:hover svg line {
+  stroke: rgba(255,220,100,1);
+}
+.task-ms-diamond-hover {
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.task-ms-diamond-hover:hover {
+  box-shadow: 0 0 12px rgba(255,220,100,0.8) !important;
+  transform: translate(-50%,-50%) rotate(45deg) scale(1.3) !important;
+}
 </style>
 </head>
 <body>
@@ -413,20 +570,33 @@ td {
   <div class="leg"><span style="display:inline-block;width:9px;height:9px;background:var(--ms-diamond);transform:rotate(45deg);box-shadow:0 0 5px rgba(255,228,160,0.4);flex-shrink:0;"></span>task milestone</div>
 </div>
 
-<div id="milestone-panel" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
-  <span style="font-size:10px;font-family:var(--mono);color:var(--text3);flex-shrink:0">milestones ▸</span>
-  <span id="ms-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
-  <span style="display:inline-flex;align-items:center;gap:4px;margin-left:4px">
-    <input id="ms-name" type="text" placeholder="name" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;width:110px;outline:none"/>
-    <input id="ms-date" type="date" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;outline:none"/>
-    <button data-action="add-ms" style="background:rgba(255,220,100,0.1);border:1px solid rgba(255,220,100,0.4);color:rgba(255,220,100,0.9);font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:4px;cursor:pointer">+ add</button>
-  </span>
+<div class="ms-panel-header" data-action="toggle-ms-panel" id="ms-panel-header">
+  <div class="ms-panel-header-left">
+    <svg width="12" height="14" viewBox="0 0 12 14" style="flex-shrink:0">
+      <line x1="2" y1="0" x2="2" y2="14" stroke="rgba(255,220,100,0.7)" stroke-width="1.5"/>
+      <polygon points="2,1 12,6 2,11" fill="rgba(255,220,100,0.9)"/>
+    </svg>
+    <span class="ms-panel-title">milestones</span>
+    <span class="ms-panel-count" id="ms-count">0</span>
+  </div>
+  <span class="ms-panel-chevron">▾</span>
+</div>
+<div class="ms-panel-body" id="ms-panel-body">
+  <div class="ms-panel-body-inner">
+    <span id="ms-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
+    <span style="display:inline-flex;align-items:center;gap:4px;margin-left:4px">
+      <input id="ms-name" type="text" placeholder="name" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;width:110px;outline:none"/>
+      <input id="ms-date" type="date" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;outline:none"/>
+      <button data-action="add-ms" style="background:rgba(255,220,100,0.1);border:1px solid rgba(255,220,100,0.4);color:rgba(255,220,100,0.9);font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:4px;cursor:pointer">+ add</button>
+    </span>
+  </div>
 </div>
 <div id="zoom-bar"></div>
 <div class="stats" id="stats"></div>
 
 <div id="loading"><div class="spinner"></div><span>loading from google sheets…</span></div>
 <div id="error-msg"></div>
+<div class="ms-tooltip" id="ms-tooltip"><div class="ms-tooltip-card" id="ms-tooltip-card"></div></div>
 <div class="table-wrap" id="table-wrap" style="display:none"></div>
 
 <script>
@@ -858,6 +1028,9 @@ function renderMilestoneList() {
   const list = document.getElementById('ms-list');
   if (!list) return;
   const ms = getMilestones();
+  // Update count badge
+  const countEl = document.getElementById('ms-count');
+  if (countEl) countEl.textContent = ms.length;
   list.innerHTML = ms.map((m,i) => `
     <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,220,100,0.08);border:1px solid rgba(255,220,100,0.3);border-radius:4px;padding:2px 6px;font-size:10px;font-family:var(--mono);color:rgba(255,220,100,0.9)">
       ${m.label} <span style="color:var(--text3)">${m.date}</span>
@@ -945,14 +1118,28 @@ function toggleTaskMilestone(key, btnEl) {
     btnEl.title = 'Mark as milestone';
     // Hide diamond in this row
     const row = btnEl.closest('tr');
-    if (row) { const d = row.querySelector('.task-ms-diamond'); if (d) d.style.display = 'none'; }
+    if (row) {
+      const d = row.querySelector('.task-ms-diamond');
+      if (d) {
+        d.style.display = 'none';
+        d.style.pointerEvents = 'none';
+        d.classList.remove('task-ms-diamond-hover');
+      }
+    }
   } else {
     taskMilestones.add(key);
     btnEl.classList.add('ms-active');
     btnEl.title = 'Remove milestone';
     // Show diamond in this row
     const row = btnEl.closest('tr');
-    if (row) { const d = row.querySelector('.task-ms-diamond'); if (d) d.style.display = ''; }
+    if (row) {
+      const d = row.querySelector('.task-ms-diamond');
+      if (d) {
+        d.style.display = '';
+        d.style.pointerEvents = 'auto';
+        d.classList.add('task-ms-diamond-hover');
+      }
+    }
   }
 }
 
@@ -1095,18 +1282,42 @@ function renderTable() {
 
   // ── Flag pins: positioned inside bar-col <th> only ────────────────────────
   // Stagger odd-indexed flags 8px lower so close labels don't collide
+  // Compute task health per milestone for tooltip
+  const msHealthData = visibleMilestones.map(m => {
+    const msDate = parseLocal(m.date);
+    const relatedTasks = msDate ? tasks.filter(t => {
+      const ed = parseLocal(t.end);
+      return ed && ed <= msDate;
+    }) : [];
+    const overdue = relatedTasks.filter(t => t._rag === 'red').length;
+    const atRisk  = relatedTasks.filter(t => t._rag === 'amber').length;
+    const done    = relatedTasks.filter(t => t._rag === 'green').length;
+    const total   = relatedTasks.length;
+    const daysLeft = msDate ? Math.ceil((msDate - today) / 86400000) : null;
+    return { overdue, atRisk, done, total, daysLeft };
+  });
+
   const flagsHTML = visibleMilestones.length ? `
     <div style="position:relative;height:34px;overflow:visible;">
       ${visibleMilestones.map((m, i) => {
         const yo = (i % 2 === 0) ? 0 : 9;
         const poleH = 34 - yo;
         const lbl = m.label.length > 13 ? m.label.slice(0,12)+'\u2026' : m.label;
-        return `<div style="position:absolute;left:${m.p.toFixed(2)}%;top:${yo}px;transform:translateX(-1.5px);z-index:12;pointer-events:none;" title="${m.label} \u2014 ${m.date}">
+        const health = msHealthData[i];
+        return `<div class="ms-flag-hit" style="position:absolute;left:${m.p.toFixed(2)}%;top:${yo}px;transform:translateX(-1.5px);z-index:12;padding:0 8px 0 0;"
+          data-ms-type="gate"
+          data-ms-label="${m.label.replace(/"/g,'&quot;')}"
+          data-ms-date="${m.date}"
+          data-ms-days="${health.daysLeft}"
+          data-ms-total="${health.total}"
+          data-ms-overdue="${health.overdue}"
+          data-ms-atrisk="${health.atRisk}"
+          data-ms-done="${health.done}">
           <svg width="14" height="${poleH}" viewBox="0 0 14 ${poleH}" style="display:block;overflow:visible;">
             <line x1="2" y1="0" x2="2" y2="${poleH}" stroke="rgba(255,220,100,0.72)" stroke-width="1.5"/>
             <polygon points="2,2 14,7 2,12" fill="rgba(255,220,100,0.92)"/>
           </svg>
-          <span style="position:absolute;top:1px;left:17px;font-size:7.5px;font-family:var(--mono);color:rgba(255,220,100,0.88);white-space:nowrap;letter-spacing:0.04em;">${lbl}</span>
+          <span style="position:absolute;top:1px;left:17px;font-size:7.5px;font-family:var(--mono);color:rgba(255,220,100,0.88);white-space:nowrap;letter-spacing:0.04em;pointer-events:none;">${lbl}</span>
         </div>`;
       }).join('')}
     </div>` : '';
@@ -1190,7 +1401,15 @@ function renderTable() {
       const isTaskMs = taskMilestones.has(msKey);
       // Diamond at end-date position inside bar-outer
       const endPct = pctOf(clampedEnd);
-      const taskDiamond = `<div class="task-ms-diamond" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;pointer-events:none;box-shadow:0 0 7px rgba(255,220,100,0.55);"></div>`;
+      const ragLabel = {red:'Overdue',amber:'At Risk',green:'Done',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
+      const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+        data-ms-type="diamond"
+        data-ms-label="${t.activity.replace(/"/g,'&quot;')}"
+        data-ms-date="${t.end}"
+        data-ms-owner="${(t.owner||'—').replace(/"/g,'&quot;')}"
+        data-ms-start="${t.start}"
+        data-ms-rag="${rag}"
+        data-ms-rag-label="${ragLabel}"></div>`;
 
       html += `<tr${isCollapsed?' style="display:none"':''}>
         <td class="activity-cell">
@@ -1259,8 +1478,125 @@ document.body.addEventListener('click', function(e) {
 
   } else if (action === 'toggle-task-ms') {
     toggleTaskMilestone(el.dataset.key, el);
+
+  } else if (action === 'toggle-ms-panel') {
+    const header = document.getElementById('ms-panel-header');
+    const body   = document.getElementById('ms-panel-body');
+    if (header && body) {
+      header.classList.toggle('expanded');
+      body.classList.toggle('open');
+    }
   }
 });
+
+// ── Milestone tooltip — delegated hover handlers ─────────────────────────────
+(function() {
+  const tooltip = document.getElementById('ms-tooltip');
+  const card    = document.getElementById('ms-tooltip-card');
+  let hideTimer = null;
+
+  function showTooltip(el, e) {
+    const type = el.dataset.msType;
+    if (!type) return;
+    clearTimeout(hideTimer);
+
+    let html = '';
+    if (type === 'gate') {
+      const label   = el.dataset.msLabel;
+      const date    = el.dataset.msDate;
+      const days    = parseInt(el.dataset.msDays, 10);
+      const total   = parseInt(el.dataset.msTotal, 10);
+      const overdue = parseInt(el.dataset.msOverdue, 10);
+      const atRisk  = parseInt(el.dataset.msAtrisk, 10);
+      const done    = parseInt(el.dataset.msDone, 10);
+
+      const fmtDate = (() => {
+        const [y,m,d] = date.split('-').map(Number);
+        const dt = new Date(y,m-1,d);
+        return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+      })();
+
+      let daysText, daysClass;
+      if (days > 0)      { daysText = days + ' day' + (days!==1?'s':'') + ' away'; daysClass = 'green'; }
+      else if (days === 0){ daysText = 'Today!'; daysClass = 'amber'; }
+      else                { daysText = Math.abs(days) + ' day' + (Math.abs(days)!==1?'s':'') + ' overdue'; daysClass = 'red'; }
+
+      html = `
+        <div class="ms-tooltip-title">🚩 ${label}</div>
+        <div class="ms-tooltip-divider"></div>
+        <div class="ms-tooltip-row"><span class="label">📅 Date</span><span class="value">${fmtDate}</span></div>
+        <div class="ms-tooltip-row"><span class="label">⏱ Status</span><span class="value ${daysClass}">${daysText}</span></div>
+        <div class="ms-tooltip-row"><span class="label">📊 Tasks</span><span class="value">${total} due before this gate</span></div>
+        ${(overdue || atRisk) ? `<div class="ms-tooltip-row" style="margin-top:4px;gap:4px">
+          ${overdue ? `<span class="ms-tooltip-badge overdue">▲ ${overdue} overdue</span>` : ''}
+          ${atRisk  ? `<span class="ms-tooltip-badge at-risk">● ${atRisk} at risk</span>` : ''}
+          ${done    ? `<span class="ms-tooltip-badge on-track">✓ ${done} done</span>` : ''}
+        </div>` : (done ? `<div class="ms-tooltip-row" style="margin-top:4px"><span class="ms-tooltip-badge on-track">✓ ${done} done</span></div>` : '')}
+      `;
+    } else if (type === 'diamond') {
+      const label    = el.dataset.msLabel;
+      const date     = el.dataset.msDate;
+      const start    = el.dataset.msStart;
+      const owner    = el.dataset.msOwner;
+      const rag      = el.dataset.msRag;
+      const ragLabel = el.dataset.msRagLabel;
+
+      const fmtD = (s) => {
+        const [y,m,d] = s.split('-').map(Number);
+        return new Date(y,m-1,d).toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+      };
+
+      html = `
+        <div class="ms-tooltip-title">◆ ${label}</div>
+        <div class="ms-tooltip-divider"></div>
+        <div class="ms-tooltip-row"><span class="label">📅 Dates</span><span class="value">${fmtD(start)} → ${fmtD(date)}</span></div>
+        <div class="ms-tooltip-row"><span class="label">👤 Owner</span><span class="value">${owner}</span></div>
+        <div class="ms-tooltip-row"><span class="label">🔶 Status</span><span class="value ${rag}">${ragLabel}</span></div>
+      `;
+    }
+
+    card.innerHTML = html;
+
+    // Position: near the element, auto above/below
+    const rect = el.getBoundingClientRect();
+    tooltip.style.left = rect.left + 'px';
+    tooltip.classList.add('visible');
+
+    // Measure tooltip height
+    tooltip.style.top = '0px';
+    const tipRect = tooltip.getBoundingClientRect();
+    const tipH = tipRect.height;
+
+    // Prefer below; if not enough space, go above
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= tipH + 8) {
+      tooltip.style.top = (rect.bottom + 6) + 'px';
+    } else {
+      tooltip.style.top = (rect.top - tipH - 6) + 'px';
+    }
+
+    // Keep within viewport horizontally
+    const tipW = tooltip.getBoundingClientRect().width;
+    if (rect.left + tipW > window.innerWidth - 12) {
+      tooltip.style.left = (window.innerWidth - tipW - 12) + 'px';
+    }
+  }
+
+  function hideTooltip() {
+    hideTimer = setTimeout(() => {
+      tooltip.classList.remove('visible');
+    }, 80);
+  }
+
+  document.body.addEventListener('mouseover', function(e) {
+    const flag = e.target.closest('.ms-flag-hit');
+    if (flag) { showTooltip(flag, e); return; }
+    const diamond = e.target.closest('.task-ms-diamond-hover');
+    if (diamond) { showTooltip(diamond, e); return; }
+    // Mouse moved to something that is NOT a flag or diamond — hide tooltip
+    hideTooltip();
+  });
+})();
 
 // Auto-refresh every 5 minutes
 setInterval(loadData, 5 * 60 * 1000);
