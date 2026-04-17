@@ -557,23 +557,43 @@ function parseCSVLine(line) {
 }
 
 // ── DATE NORMALISER ───────────────────────────────────────────────────────────
-// Handles: M/D/YYYY, MM/DD/YYYY, YYYY-MM-DD, D-Mon-YYYY, Mon-DD-YYYY, DD Mon YYYY, etc.
+// Handles: M/D/YYYY, MM/DD/YYYY, YYYY-MM-DD, D-Mon-YYYY, Mon-DD-YYYY, DD Mon YYYY,
+//          Excel/Sheets serial numbers (e.g. 46927), ISO with time, etc.
 function fixDate(s) {
   if (!s) return '';
   // Strip surrounding quotes and whitespace
   s = s.replace(/^["'\s]+|["'\s]+$/g, '');
   if (!s) return '';
 
-  // Already YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Already YYYY-MM-DD (possibly with time suffix)
+  const isoFull = s.match(/^(\d{4}-\d{2}-\d{2})(T.*)?$/);
+  if (isoFull) return isoFull[1];
 
-  // M/D/YYYY or MM/DD/YYYY  (Google Sheets default US locale)
-  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (slash) {
-    return `${slash[3]}-${slash[1].padStart(2,'0')}-${slash[2].padStart(2,'0')}`;
+  // Excel / Google Sheets serial number (integer, typically 40000–60000 for 2010–2064)
+  if (/^\d{5}$/.test(s)) {
+    const serial = parseInt(s, 10);
+    if (serial > 25000 && serial < 80000) {
+      // Excel epoch: Dec 30 1899
+      const msPerDay = 86400000;
+      const epoch = new Date(Date.UTC(1899, 11, 30));
+      const d = new Date(epoch.getTime() + serial * msPerDay);
+      const y = d.getUTCFullYear(), mo = String(d.getUTCMonth()+1).padStart(2,'0'), dy = String(d.getUTCDate()).padStart(2,'0');
+      return `${y}-${mo}-${dy}`;
+    }
   }
 
-  // D/M/YYYY (some regional locales) — same regex, keep as fallback via new Date
+  // M/D/YYYY or MM/DD/YYYY  (Google Sheets US locale)
+  const slashUS = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashUS) {
+    return `${slashUS[3]}-${slashUS[1].padStart(2,'0')}-${slashUS[2].padStart(2,'0')}`;
+  }
+
+  // D.M.YYYY or DD.MM.YYYY (European dot format)
+  const dotEU = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (dotEU) {
+    return `${dotEU[3]}-${dotEU[2].padStart(2,'0')}-${dotEU[1].padStart(2,'0')}`;
+  }
+
   // DD-Mon-YYYY or D-Mon-YYYY  e.g. "20-Mar-2026"
   const dashMon = s.match(/^(\d{1,2})-([A-Za-z]+)-(\d{4})$/);
   if (dashMon) {
@@ -595,9 +615,19 @@ function fixDate(s) {
     return `${monSpace[3]}-${mo}-${monSpace[2].padStart(2,'0')}`;
   }
 
-  // Last resort — parse as local time to avoid UTC midnight shift
-  const d = new Date(s + 'T00:00:00');
-  if (!isNaN(d)) { const y=d.getFullYear(),mo=String(d.getMonth()+1).padStart(2,'0'),dy=String(d.getDate()).padStart(2,'0'); return `${y}-${mo}-${dy}`; }
+  // Mon-DD-YYYY e.g. "Mar-20-2026"
+  const monDash = s.match(/^([A-Za-z]+)-(\d{1,2})-(\d{4})$/);
+  if (monDash) {
+    const mo = monthNum(monDash[1]); if (!mo) return '';
+    return `${monDash[3]}-${mo}-${monDash[2].padStart(2,'0')}`;
+  }
+
+  // Last resort — parse via Date object (force midnight local)
+  const d = new Date(s + (s.includes('T') ? '' : 'T00:00:00'));
+  if (!isNaN(d)) {
+    const y=d.getFullYear(), mo=String(d.getMonth()+1).padStart(2,'0'), dy=String(d.getDate()).padStart(2,'0');
+    return `${y}-${mo}-${dy}`;
+  }
 
   return '';
 }
@@ -677,6 +707,8 @@ function parseCSV(text) {
     return null;
   }
 
+  let skippedNoActivity = 0, skippedNoDate = 0, firstSkippedDateSample = null;
+
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (!line.trim()) continue;
@@ -689,10 +721,15 @@ function parseCSV(text) {
     if (rowFunc)  currentFunc = rowFunc;
 
     const activity = actCol >= 0 ? (cells[actCol] || '').trim() : '';
-    if (!activity) continue; // skip summary/header rows but carry-forward is already done above
+    if (!activity) { skippedNoActivity++; continue; }
 
-    const start = fixDate(startCol >= 0 ? (cells[startCol] || '') : '');
-    if (!start) continue;
+    const rawStart = startCol >= 0 ? (cells[startCol] || '') : '';
+    const start = fixDate(rawStart);
+    if (!start) {
+      skippedNoDate++;
+      if (!firstSkippedDateSample) firstSkippedDateSample = { activity, rawStart, allCells: cells };
+      continue;
+    }
     const end = fixDate(endCol >= 0 ? (cells[endCol] || '') : '') || start;
 
     // Sanitise owner — reject if it looks like a date
@@ -717,7 +754,10 @@ function parseCSV(text) {
       status: rawStatus,
     });
   }
-  console.log('[RASIC] Parsed', tasks.length, 'tasks. Functions:', [...new Set(tasks.map(t=>t.func))]);
+  console.log(`[RASIC] Parsed ${tasks.length} tasks | skipped no-activity: ${skippedNoActivity} | skipped no-date: ${skippedNoDate}`);
+  if (firstSkippedDateSample) {
+    console.warn('[RASIC] First row skipped due to unparseable date:', firstSkippedDateSample);
+  }
   return tasks.length ? tasks : null;
 }
 
