@@ -612,41 +612,70 @@ function monthNum(name) {
 
 // ── CSV → TASKS ───────────────────────────────────────────────────────────────
 function parseCSV(text) {
+  // Strip BOM and normalise line endings
+  text = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const rawLines = text.trim().split('\n');
   const tasks = [];
   let currentFunc = '';
   let currentPhase = 'Phase 1';
 
-  // Find header row — must contain both Activity and Start Date
+  // Normalise a header cell for matching
+  const norm = s => s.replace(/"/g,'').trim().toLowerCase().replace(/[\s\-_\/]+/g,' ');
+
+  // Find header row — look for any row that has at least one date-ish column AND an activity-ish column
+  const activityKw  = ['activity','task','description','work item','milestone','deliverable'];
+  const startKw     = ['start','begin','from'];
+  const endKw       = ['end','finish','due','to','complete','target'];
+
   let headerIdx = -1;
-  for (let i = 0; i < rawLines.length; i++) {
-    const row = rawLines[i];
-    if (row.includes('Activity') && (row.includes('Start Date') || row.includes('Start'))) {
-      headerIdx = i; break;
+  for (let i = 0; i < Math.min(rawLines.length, 15); i++) {
+    const cells = parseCSVLine(rawLines[i]).map(norm);
+    const hasActivity = cells.some(h => activityKw.some(k => h.includes(k)));
+    const hasDate     = cells.some(h => startKw.some(k => h.includes(k)) || endKw.some(k => h.includes(k)));
+    if (hasActivity && hasDate) { headerIdx = i; break; }
+  }
+
+  // If still not found, try any row with ≥3 non-empty cells in first 10 rows as a last resort
+  if (headerIdx < 0) {
+    for (let i = 0; i < Math.min(rawLines.length, 10); i++) {
+      const cells = parseCSVLine(rawLines[i]).filter(c => c.replace(/"/g,'').trim());
+      if (cells.length >= 3) { headerIdx = i; break; }
     }
   }
   if (headerIdx < 0) return null;
 
-  const headers = parseCSVLine(rawLines[headerIdx]).map(h => h.replace(/"/g,'').trim().toLowerCase());
+  const headers = parseCSVLine(rawLines[headerIdx]).map(norm);
   console.log('[RASIC] Headers detected:', headers);
 
+  // Flexible column finder — tries exact includes, then partial word match
   const col = (...names) => {
     for (const name of names) {
-      const idx = headers.findIndex(h => h.includes(name));
+      const n = norm(name);
+      let idx = headers.findIndex(h => h === n);
+      if (idx >= 0) return idx;
+      idx = headers.findIndex(h => h.includes(n));
+      if (idx >= 0) return idx;
+      // Try matching any keyword word-by-word
+      idx = headers.findIndex(h => n.split(' ').every(w => h.includes(w)));
       if (idx >= 0) return idx;
     }
     return -1;
   };
 
   const phaseCol  = col('phase');
-  const funcCol   = col('function');
-  const actCol    = col('activity');
-  const startCol  = col('start date', 'start');
-  const endCol    = col('end date', 'end');
-  const ownerCol  = col('responsible', 'owner', 'r - name', 'r-name');
-  const statusCol = col('status', 'progress');
+  const funcCol   = col('function', 'dept', 'department', 'category', 'area', 'group', 'stream');
+  const actCol    = col('activity', 'task', 'description', 'work item', 'milestone', 'deliverable', 'item');
+  const startCol  = col('start date', 'start', 'begin date', 'begin', 'from', 'planned start');
+  const endCol    = col('end date', 'end', 'finish date', 'finish', 'due date', 'due', 'to', 'target date', 'completion date', 'complete');
+  const ownerCol  = col('responsible', 'owner', 'r name', 'r - name', 'accountable', 'assigned to', 'assignee', 'person', 'name');
+  const statusCol = col('status', 'progress', 'state', 'completion');
 
   console.log('[RASIC] Column indices — phase:', phaseCol, 'func:', funcCol, 'act:', actCol, 'start:', startCol, 'end:', endCol, 'owner:', ownerCol, 'status:', statusCol);
+  // Guard: if we can't find activity column or at least one date column, bail out clearly
+  if (actCol < 0 || (startCol < 0 && endCol < 0)) {
+    console.warn('[RASIC] Could not identify required columns (activity + at least one date). Headers found:', headers);
+    return null;
+  }
 
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
     const line = rawLines[i];
@@ -720,7 +749,7 @@ async function loadData() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     const parsed = parseCSV(text);
-    if (!parsed) throw new Error('could not parse sheet — check column names match exactly');
+    if (!parsed) throw new Error('could not parse sheet — open browser console (F12) to see which headers were detected. Required: Activity/Task column + Start/End date columns');
     debugTasks(parsed);
     allTasks = parsed;
     usingDemo = false;
