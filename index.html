@@ -1083,8 +1083,11 @@ function ragStatus(t) {
   // overdue: end < today AND not done
   if (endDate < today) return 'red';
   // atRisk: start <= today+3 AND status is not_started (or empty)
-  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
-  if (startDate && startDate <= today3) return 'amber';
+  //const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
+  //if (startDate && startDate <= today3) return 'amber';
+  const daysToEnd = (endDate - today) / (1000 * 60 * 60 * 24);
+
+if (daysToEnd <= 3 && status !== 'done') return 'amber';
   return 'grey';
 }
 
