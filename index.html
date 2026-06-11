@@ -1158,7 +1158,7 @@ async function loadData() {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
-  await loadMasterSheetData();
+  loadMasterSheetData();
 
   if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
     usingDemo = true; allTasks = DEMO_TASKS;
@@ -1641,8 +1641,9 @@ function renderExecutionTable() {
         : '';
 
       const agingVal = Number(t.aging);
-      const agingText = Number.isFinite(agingVal) && agingVal > 0
-        ? `+${Math.round(agingVal)}d`
+      const agingText = Number.isFinite(agingVal) && agingVal > 0 ? `+${Math.round(agingVal)}d` : '';
+      const agingHTML = agingText
+        ? `<span style="position:absolute;left:${totalSeg.endPct.toFixed(2)}%;top:50%;transform:translate(6px,-50%);font-family:var(--mono);font-size:9px;color:var(--rag-red);z-index:12;white-space:nowrap">${agingText}</span>`
         : '';
 
       const gridLines = majorTicks.map(tk =>
