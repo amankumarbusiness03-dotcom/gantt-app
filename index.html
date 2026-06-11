@@ -1640,9 +1640,10 @@ function renderExecutionTable() {
         ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
         : '';
 
-      ${agingText
-  ? `<span style="color:var(--rag-red)">${agingText}</span>`
-  : dash(t.aging === 0 ? '0' : '')}
+      const agingVal = Number(t.aging);
+      const agingText = Number.isFinite(agingVal) && agingVal > 0
+        ? `+${Math.round(agingVal)}d`
+        : '';
 
       const gridLines = majorTicks.map(tk =>
         `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
