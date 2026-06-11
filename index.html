@@ -249,6 +249,11 @@ td {
   transition: all 0.15s;
 }
 .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+.refresh-btn.active-view {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(139,156,247,0.08);
+}
 .empty-row td {
   text-align: center;
   padding: 40px;
@@ -553,6 +558,7 @@ td {
       </select>
       <select id="ownerFilter"><option value="">all owners</option></select>
     </div>
+    <button class="refresh-btn" id="viewToggle" onclick="toggleViewMode()" title="show execution tracking view">execution view</button>
     <button class="refresh-btn" onclick="loadData()">↻ refresh</button>
   </div>
 </div>
@@ -602,6 +608,7 @@ td {
 <script>
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const SHEET_CSV_URL = window.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv';
+const MASTER_SHEET_CSV_URL = window.MASTER_SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851';
 
 // ── DEMO DATA ─────────────────────────────────────────────────────────────────
 const DEMO_TASKS = [
@@ -702,7 +709,90 @@ const DEMO_TASKS = [
 ];
 
 let allTasks = [];
+let masterTasks = [];
+let executionTasks = [];
+let executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
+let masterSheetLoadError = '';
 let usingDemo = false;
+let viewMode = 'planning';
+
+function syncViewToggle() {
+  const btn = document.getElementById('viewToggle');
+  if (!btn) return;
+  const isExecution = viewMode === 'execution';
+  btn.textContent = isExecution ? 'planning view' : 'execution view';
+  btn.title = isExecution ? 'show current planning gantt view' : 'show execution tracking view';
+  btn.classList.toggle('active-view', isExecution);
+}
+
+function toggleViewMode() {
+  viewMode = viewMode === 'planning' ? 'execution' : 'planning';
+  syncViewToggle();
+  renderAll();
+}
+
+function normalizeTaskText(value) {
+  return (value || '')
+    .toString()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function taskMergeKey(row) {
+  return `${normalizeTaskText(row.func)}::${normalizeTaskText(row.activity)}`;
+}
+
+function buildMasterTaskMap(rows) {
+  const map = new Map();
+  (rows || []).forEach(row => {
+    const key = taskMergeKey(row);
+    if (!key || key === '::') return;
+    if (!map.has(key)) map.set(key, row);
+  });
+  return map;
+}
+
+function syncExecutionTasks() {
+  const masterMap = buildMasterTaskMap(masterTasks);
+  let matched = 0;
+
+  executionTasks = (allTasks || []).map(task => {
+    const master = masterMap.get(taskMergeKey(task)) || null;
+    if (master) matched++;
+
+    return {
+      ...task,
+      planningStart: task.start,
+      planningEnd: task.end,
+      planningOwner: task.owner,
+      masterMatched: Boolean(master),
+      responsible: master ? master.responsible : '',
+      accountable: master ? master.accountable : '',
+      startDate: master ? master.startDate : '',
+      plannedEndDate: master ? master.plannedEndDate : '',
+      leadTimeRequested: master ? master.leadTimeRequested : '',
+      revisedEndDate: master ? master.revisedEndDate : '',
+      actualEndDate: master ? master.actualEndDate : '',
+      aging: master ? master.aging : '',
+      executionStatus: master ? master.status : '',
+      remark: master ? master.remark : '',
+      progressPct: master ? master.progressPct : '',
+    };
+  });
+
+  const planningKeys = new Set((allTasks || []).map(taskMergeKey));
+  const unmatchedMaster = (masterTasks || []).filter(row => !planningKeys.has(taskMergeKey(row))).length;
+  executionMergeStats = {
+    total: executionTasks.length,
+    matched,
+    unmatchedPlanning: executionTasks.length - matched,
+    unmatchedMaster,
+  };
+  console.log('[EXECUTION] Merge stats:', executionMergeStats);
+}
 
 // ── ROBUST CSV PARSER (handles quoted fields with commas inside) ───────────────
 function parseCSVLine(line) {
@@ -931,6 +1021,129 @@ function parseCSV(text) {
   return tasks.length ? tasks : null;
 }
 
+// MASTER SHEET -> execution rows. Loaded in the background for Execution View.
+function parseMasterCSV(text) {
+  text = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rawLines = text.trim().split('\n');
+  const rows = [];
+  let currentFunc = '';
+
+  const clean = v => (v || '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  const norm = s => clean(s).toLowerCase().replace(/[%]/g, ' percent').replace(/[\s\-_\/]+/g, ' ');
+  const parseNumber = v => {
+    const match = clean(v).match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : '';
+  };
+  const parseProgress = v => {
+    const raw = clean(v);
+    const num = parseNumber(raw);
+    if (num === '') return '';
+    const pct = raw.includes('%') || num > 1 ? num : num * 100;
+    return Math.max(0, Math.min(100, pct));
+  };
+
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rawLines.length, 15); i++) {
+    const cells = parseCSVLine(rawLines[i]).map(norm);
+    const hasActivity = cells.some(h => h === 'activity' || h.includes('activity'));
+    const hasExecutionDate = cells.some(h => h.includes('planned end') || h.includes('revised end') || h.includes('actual end'));
+    if (hasActivity && hasExecutionDate) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+
+  const headers = parseCSVLine(rawLines[headerIdx]).map(norm);
+  const col = (...names) => {
+    for (const name of names) {
+      const n = norm(name);
+      let idx = headers.findIndex(h => h === n);
+      if (idx >= 0) return idx;
+      idx = headers.findIndex(h => h.includes(n));
+      if (idx >= 0) return idx;
+      idx = headers.findIndex(h => n.split(' ').every(w => h.includes(w)));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const funcCol       = col('function');
+  const actCol        = col('activity', 'task', 'work item');
+  const startCol      = col('start date', 'start');
+  const plannedEndCol = col('planned end date', 'planned end');
+  const leadTimeCol   = col('lead time requested', 'lead time');
+  const revisedEndCol = col('revised end date', 'revised end');
+  const actualEndCol  = col('actual end date', 'actual end');
+  const agingCol      = col('aging', 'ageing');
+  const respCol       = col('responsible');
+  const acctCol       = col('accountable');
+  const statusCol     = col('status');
+  const remarkCol     = col('remark', 'remarks');
+  const progressCol   = col('progress percent', 'progress');
+
+  console.log('[MASTER] Headers detected:', headers);
+  console.log('[MASTER] Column indices - func:', funcCol, 'act:', actCol, 'start:', startCol, 'plannedEnd:', plannedEndCol, 'revisedEnd:', revisedEndCol, 'responsible:', respCol, 'accountable:', acctCol, 'status:', statusCol, 'progress:', progressCol);
+
+  if (actCol < 0) {
+    console.warn('[MASTER] Could not identify required Activity column. Headers found:', headers);
+    return null;
+  }
+
+  for (let i = headerIdx + 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (!line.trim()) continue;
+    const cells = parseCSVLine(line);
+
+    const rowFunc = funcCol >= 0 ? clean(cells[funcCol]) : '';
+    if (rowFunc) currentFunc = rowFunc;
+
+    const activity = actCol >= 0 ? clean(cells[actCol]) : '';
+    if (!activity) continue;
+
+    rows.push({
+      func: currentFunc || 'General',
+      activity,
+      startDate: fixDate(startCol >= 0 ? cells[startCol] : ''),
+      plannedEndDate: fixDate(plannedEndCol >= 0 ? cells[plannedEndCol] : ''),
+      leadTimeRequested: leadTimeCol >= 0 ? clean(cells[leadTimeCol]) : '',
+      revisedEndDate: fixDate(revisedEndCol >= 0 ? cells[revisedEndCol] : ''),
+      actualEndDate: fixDate(actualEndCol >= 0 ? cells[actualEndCol] : ''),
+      aging: agingCol >= 0 ? parseNumber(cells[agingCol]) : '',
+      responsible: respCol >= 0 ? clean(cells[respCol]) : '',
+      accountable: acctCol >= 0 ? clean(cells[acctCol]) : '',
+      status: statusCol >= 0 ? clean(cells[statusCol]) : '',
+      remark: remarkCol >= 0 ? clean(cells[remarkCol]) : '',
+      progressPct: progressCol >= 0 ? parseProgress(cells[progressCol]) : '',
+    });
+  }
+
+  console.log(`[MASTER] Parsed ${rows.length} execution rows`);
+  return rows.length ? rows : null;
+}
+
+async function loadMasterSheetData() {
+  if (!MASTER_SHEET_CSV_URL || MASTER_SHEET_CSV_URL === 'YOUR_MASTER_SHEET_CSV_URL_HERE') {
+    masterTasks = [];
+    masterSheetLoadError = '';
+    return;
+  }
+
+  try {
+    const url = MASTER_SHEET_CSV_URL + (MASTER_SHEET_CSV_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const parsed = parseMasterCSV(text);
+    if (!parsed) throw new Error('could not parse Master Sheet');
+    masterTasks = parsed;
+    masterSheetLoadError = '';
+    syncExecutionTasks();
+  } catch (e) {
+    masterTasks = [];
+    masterSheetLoadError = e.message;
+    syncExecutionTasks();
+    console.warn('[MASTER] Background load failed:', e);
+  }
+}
+
 // Debug helper — open browser console (F12) to see parsed tasks
 function debugTasks(tasks) {
   const invalid = tasks.filter(t => !t.start || !t.end || t.start === '' || t.end === '');
@@ -945,9 +1158,11 @@ async function loadData() {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
+  loadMasterSheetData();
 
   if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
     usingDemo = true; allTasks = DEMO_TASKS;
+    syncExecutionTasks();
     setStatus('demo mode', false);
     document.getElementById('last-updated').textContent = 'demo data — connect your sheet';
     renderAll(); return;
@@ -962,6 +1177,7 @@ async function loadData() {
     if (!parsed) throw new Error('could not parse sheet — open browser console (F12) to see which headers were detected. Required: Activity/Task column + Start/End date columns');
     debugTasks(parsed);
     allTasks = parsed;
+    syncExecutionTasks();
     usingDemo = false;
     setStatus('live', true);
     document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
@@ -969,6 +1185,7 @@ async function loadData() {
   } catch(e) {
     console.warn('Sheet load failed:', e);
     allTasks = DEMO_TASKS; usingDemo = true;
+    syncExecutionTasks();
     setStatus('sheet error — showing demo', false);
     document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
     const errEl = document.getElementById('error-msg');
@@ -1083,11 +1300,8 @@ function ragStatus(t) {
   // overdue: end < today AND not done
   if (endDate < today) return 'red';
   // atRisk: start <= today+3 AND status is not_started (or empty)
-  //const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
-  //if (startDate && startDate <= today3) return 'amber';
-  const daysToEnd = (endDate - today) / (1000 * 60 * 60 * 24);
-
-if (daysToEnd <= 3 && status !== 'done') return 'amber';
+  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
+  if (startDate && startDate <= today3) return 'amber';
   return 'grey';
 }
 
@@ -1148,13 +1362,14 @@ function toggleTaskMilestone(key, btnEl) {
 
 // ── RENDER ALL ────────────────────────────────────────────────────────────────
 function renderAll() {
-  const funcs  = [...new Set(allTasks.map(t=>t.func).filter(Boolean))];
-  const owners = [...new Set(allTasks.map(t=>t.owner).filter(Boolean))].sort();
+  const sourceTasks = viewMode === 'execution' ? executionTasks : allTasks;
+  const funcs  = [...new Set(sourceTasks.map(t=>t.func).filter(Boolean))];
+  const owners = [...new Set(sourceTasks.map(t=>viewMode === 'execution' ? t.responsible : t.owner).filter(Boolean))].sort();
   const funcSel  = document.getElementById('funcFilter');
   const ownerSel = document.getElementById('ownerFilter');
   const savedFunc = funcSel.value, savedOwner = ownerSel.value;
   funcSel.innerHTML  = '<option value="">all functions</option>'  + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
-  ownerSel.innerHTML = '<option value="">all owners</option>' + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
+  ownerSel.innerHTML = `<option value="">${viewMode === 'execution' ? 'all responsible' : 'all owners'}</option>` + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
   renderTable();
 }
 
@@ -1162,7 +1377,345 @@ function renderAll() {
 let zoomMode = 'overview';
 let zoomMonth = null;
 
+function escapeHTML(value) {
+  return (value == null ? '' : String(value)).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+}
+
+function parseLocalDate(s) {
+  if (!s) return null;
+  const [y,m,d] = s.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+
+function executionRagStatus(t) {
+  const status = (t.executionStatus || t.status || '').toLowerCase().trim();
+  const endDate = parseLocalDate(t.revisedEndDate || t.plannedEndDate || t.actualEndDate || t.planningEnd || t.end);
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  if (status.includes('overdue')) return 'red';
+  if (status.includes('due within') || status.includes('at risk')) return 'amber';
+  if (status.includes('complete') || status === 'done') return 'green';
+  if (status.includes('progress')) return 'blue';
+  if (status.includes('not started')) return 'grey';
+  if (!endDate) return 'grey';
+
+  const daysToEnd = (endDate - today) / 86400000;
+  if (endDate < today) return 'red';
+  if (daysToEnd <= 3) return 'amber';
+  return 'grey';
+}
+
+function renderExecutionTable() {
+  const selFunc  = document.getElementById('funcFilter').value;
+  const selPhase = document.getElementById('phaseFilter').value;
+  const selResponsible = document.getElementById('ownerFilter').value;
+  if (selResponsible !== activeOwner) activeOwner = selResponsible;
+
+  let tasks = executionTasks.filter(t => {
+    if (selFunc  && t.func  !== selFunc)  return false;
+    if (selPhase && t.phase !== selPhase) return false;
+    if (activeOwner && t.responsible !== activeOwner) return false;
+    return true;
+  }).map(t => {
+    const execStart = t.startDate || t.planningStart || t.start;
+    const plannedEnd = t.plannedEndDate || t.revisedEndDate || t.planningEnd || t.end;
+    const execEnd = t.revisedEndDate || t.plannedEndDate || t.actualEndDate || t.planningEnd || t.end;
+    return { ...t, _execStart: execStart, _plannedEnd: plannedEnd, _execEnd: execEnd, _rag: executionRagStatus(t) };
+  });
+
+  const total      = tasks.length;
+  const redCount   = tasks.filter(t => t._rag === 'red').length;
+  const amberCount = tasks.filter(t => t._rag === 'amber').length;
+  const doneCount  = tasks.filter(t => t._rag === 'green').length;
+  const ph1        = tasks.filter(t => t.phase === 'Phase 1').length;
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-val">${total}</div><div class="stat-lbl">total tasks</div></div>
+    <div class="stat rag-red"><div class="stat-val" style="color:var(--rag-red)">${redCount}</div><div class="stat-lbl">overdue</div></div>
+    <div class="stat rag-amber"><div class="stat-val" style="color:var(--rag-amber)">${amberCount}</div><div class="stat-lbl">at risk</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--rag-green)">${doneCount}</div><div class="stat-lbl">done</div></div>
+    <div class="stat"><div class="stat-val">${ph1}</div><div class="stat-lbl">phase 1</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--p2)">${total-ph1}</div><div class="stat-lbl">phase 2</div></div>
+  `;
+
+  const fmt = s => {
+    const d = parseLocalDate(s);
+    return d ? d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) : '';
+  };
+  const dash = value => value ? escapeHTML(value) : '<span style="color:var(--text3)">-</span>';
+  const allD = tasks.flatMap(t=>[parseLocalDate(t._execStart), parseLocalDate(t._plannedEnd), parseLocalDate(t._execEnd)]).filter(d=>d&&!isNaN(d));
+
+  if (!allD.length) {
+    document.getElementById('zoom-bar').innerHTML = '';
+    document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td colspan="10">no execution tasks match filters</td></tr></tbody></table>';
+    document.getElementById('loading').style.display='none';
+    document.getElementById('table-wrap').style.display='block';
+    return;
+  }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  let minD, maxD;
+
+  if (zoomMode === 'month' && zoomMonth) {
+    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
+    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0);
+    tasks = tasks.filter(t => {
+      const s = parseLocalDate(t._execStart), e = parseLocalDate(t._execEnd);
+      return s && e && s <= maxD && e >= minD;
+    });
+  } else {
+    const globalMin = new Date(Math.min(...allD));
+    const globalMax = new Date(Math.max(...allD));
+    minD = new Date(globalMin); minD.setDate(minD.getDate()-3);
+    maxD = new Date(globalMax); maxD.setDate(maxD.getDate()+3);
+  }
+
+  const totalMs = maxD - minD;
+  const pctOf = d => Math.max(0, Math.min(100, ((d-minD)/totalMs)*100));
+  const todayPct = pctOf(today);
+
+  let majorTicks = [];
+  if (zoomMode === 'month' && zoomMonth) {
+    const daysInMonth = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      const p = pctOf(dt);
+      majorTicks.push({ label: String(d), p, bold: dt.getDay() === 1 });
+    }
+  } else {
+    let td2 = new Date(minD.getFullYear(), minD.getMonth(), 1);
+    while (td2 <= maxD) {
+      const p = pctOf(td2);
+      if (p >= -2 && p <= 102) majorTicks.push({ label: td2.toLocaleDateString('en-US',{month:'short',year:'2-digit'}), p });
+      td2.setMonth(td2.getMonth()+1);
+    }
+  }
+
+  const visibleMilestones = getMilestones().map(m => {
+    const d = parseLocalDate(m.date);
+    if (!d) return null;
+    const p = pctOf(d);
+    return (p >= 0 && p <= 100) ? { ...m, p } : null;
+  }).filter(Boolean);
+
+  let zoomBarHTML = '';
+  if (zoomMode === 'overview') {
+    const months = [];
+    let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
+    const endMo = new Date(Math.max(...allD));
+    while (td3 <= endMo) { months.push(new Date(td3)); td3.setMonth(td3.getMonth()+1); }
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 28px;border-bottom:1px solid var(--border);flex-wrap:wrap;background:var(--surface2)">
+      <span style="font-size:10px;font-family:var(--mono);color:var(--text3);margin-right:4px">drill into month -></span>
+      ${months.map(m=>{
+        const label = m.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+        const isToday = today.getMonth()===m.getMonth()&&today.getFullYear()===m.getFullYear();
+        return `<button onclick="drillMonth(new Date(${m.getFullYear()},${m.getMonth()},1))" style="background:${isToday?'rgba(247,95,95,0.15)':'var(--surface)'};border:1px solid ${isToday?'var(--today)':'var(--border2)'};color:${isToday?'var(--today)':'var(--text2)'};font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">${label}</button>`;
+      }).join('')}
+    </div>`;
+  } else {
+    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
+      <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">overview</button>
+      <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} - day-level view</span>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">prev</button>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next</button>
+    </div>`;
+  }
+
+  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+    ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
+  </div>`;
+
+  const msHealthData = visibleMilestones.map(m => {
+    const msDate = parseLocalDate(m.date);
+    const relatedTasks = msDate ? tasks.filter(t => {
+      const ed = parseLocalDate(t._execEnd);
+      return ed && ed <= msDate;
+    }) : [];
+    const overdue = relatedTasks.filter(t => t._rag === 'red').length;
+    const atRisk  = relatedTasks.filter(t => t._rag === 'amber').length;
+    const done    = relatedTasks.filter(t => t._rag === 'green').length;
+    const total   = relatedTasks.length;
+    const daysLeft = msDate ? Math.ceil((msDate - today) / 86400000) : null;
+    return { overdue, atRisk, done, total, daysLeft };
+  });
+
+  const flagsHTML = visibleMilestones.length ? `
+    <div style="position:relative;height:34px;overflow:visible;">
+      ${visibleMilestones.map((m, i) => {
+        const yo = (i % 2 === 0) ? 0 : 9;
+        const poleH = 34 - yo;
+        const lbl = m.label.length > 13 ? m.label.slice(0,12)+'...' : m.label;
+        const health = msHealthData[i];
+        return `<div class="ms-flag-hit" style="position:absolute;left:${m.p.toFixed(2)}%;top:${yo}px;transform:translateX(-1.5px);z-index:12;padding:0 8px 0 0;"
+          data-ms-type="gate"
+          data-ms-label="${escapeHTML(m.label)}"
+          data-ms-date="${m.date}"
+          data-ms-days="${health.daysLeft}"
+          data-ms-total="${health.total}"
+          data-ms-overdue="${health.overdue}"
+          data-ms-atrisk="${health.atRisk}"
+          data-ms-done="${health.done}">
+          <svg width="14" height="${poleH}" viewBox="0 0 14 ${poleH}" style="display:block;overflow:visible;">
+            <line x1="2" y1="0" x2="2" y2="${poleH}" stroke="rgba(255,220,100,0.72)" stroke-width="1.5"/>
+            <polygon points="2,2 14,7 2,12" fill="rgba(255,220,100,0.92)"/>
+          </svg>
+          <span style="position:absolute;top:1px;left:17px;font-size:7.5px;font-family:var(--mono);color:rgba(255,220,100,0.88);white-space:nowrap;letter-spacing:0.04em;pointer-events:none;">${escapeHTML(lbl)}</span>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
+  let html = `<table style="min-width:1450px">
+  <thead>
+    <tr>
+      <th style="min-width:220px">activity</th>
+      <th style="min-width:92px">responsible</th>
+      <th style="min-width:92px">accountable</th>
+      <th style="min-width:72px">start date</th>
+      <th style="min-width:92px">planned end</th>
+      <th style="min-width:72px">lead time</th>
+      <th style="min-width:86px">actual end</th>
+      <th style="min-width:54px">aging</th>
+      <th style="min-width:96px">status</th>
+      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
+    </tr>
+  </thead><tbody>`;
+
+  const segmentMetrics = (startDate, endDate, minWidth = 0.6) => {
+    if (!startDate || !endDate || endDate < minD || startDate > maxD || endDate < startDate) return null;
+    const clampedStart = startDate < minD ? minD : startDate;
+    const clampedEnd = endDate > maxD ? maxD : endDate;
+    const left = pctOf(clampedStart);
+    const right = pctOf(clampedEnd);
+    return { left, width: Math.max(minWidth, right - left), endPct: right };
+  };
+
+  funcs.forEach(f => {
+    const ft = tasks.filter(t => t.func === f);
+    if (!ft.length) return;
+    const isCollapsed = collapsedFuncs.has(f);
+    const grpRed   = ft.filter(t=>t._rag==='red').length;
+    const grpAmber = ft.filter(t=>t._rag==='amber').length;
+    const ragSummary = grpRed
+      ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">^ ${grpRed} overdue</span>`
+      : grpAmber
+      ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">* ${grpAmber} at risk</span>`
+      : '';
+
+    html += `<tr class="section-row${isCollapsed?' collapsed':''}">
+      <td colspan="10" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
+        <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+        <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
+        ${escapeHTML(f)}
+        ${ragSummary}
+      </td>
+    </tr>`;
+
+    ft.forEach(t => {
+      const sDate = parseLocalDate(t._execStart);
+      const eDate = parseLocalDate(t._execEnd);
+      if (!sDate || !eDate) return;
+
+      const plannedRaw = parseLocalDate(t._plannedEnd) || eDate;
+      const plannedDisplayEnd = plannedRaw > eDate ? eDate : plannedRaw;
+      const totalSeg = segmentMetrics(sDate, eDate);
+      const plannedSeg = segmentMetrics(sDate, plannedDisplayEnd);
+      const extensionSeg = plannedRaw < eDate ? segmentMetrics(plannedRaw, eDate) : null;
+      if (!totalSeg || !plannedSeg) return;
+
+      const rag = t._rag;
+      const color = ragColor(rag);
+      const rClass = ragClass(rag);
+      const progress = Number(t.progressPct);
+      const progressPct = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
+      const progressHTML = progressPct > 0
+        ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
+        : '';
+
+      const agingVal = Number(t.aging);
+      const agingText = Number.isFinite(agingVal) && agingVal > 0 ? `+${Math.round(agingVal)}d` : '';
+      const agingHTML = agingText
+        ? `<span style="position:absolute;left:${totalSeg.endPct.toFixed(2)}%;top:50%;transform:translate(6px,-50%);font-family:var(--mono);font-size:9px;color:var(--rag-red);z-index:12;white-space:nowrap">${agingText}</span>`
+        : '';
+
+      const gridLines = majorTicks.map(tk =>
+        `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+      ).join('');
+      const mLines = visibleMilestones.map(m =>
+        `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
+      ).join('');
+      const todayLine = (todayPct>=0 && todayPct<=100)
+        ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+        : '';
+
+      const ragLabel = {red:'Overdue',amber:'Due Within 3 Days',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
+      const statusText = t.executionStatus || ragLabel;
+      const tip = `${t.activity} | ${fmt(t._execStart)} -> ${fmt(t._execEnd)}${t.responsible?' | '+t.responsible:''}`;
+      const responsibleActive = t.responsible && t.responsible === activeOwner ? ' active-owner' : '';
+      const msKey = `${t.func}::${t.activity}`;
+      const isTaskMs = taskMilestones.has(msKey);
+      const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
+      const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+        data-ms-type="diamond"
+        data-ms-label="${escapeHTML(t.activity)}"
+        data-ms-date="${t._execEnd}"
+        data-ms-owner="${escapeHTML(t.responsible || '-')}"
+        data-ms-start="${t._execStart}"
+        data-ms-rag="${rag}"
+        data-ms-rag-label="${ragLabel}"></div>`;
+
+      html += `<tr${isCollapsed?' style="display:none"':''}>
+        <td class="activity-cell">
+          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
+        <td>${t.responsible
+          ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
+          : '<span style="color:var(--text3)">-</span>'}</td>
+        <td>${dash(t.accountable)}</td>
+        <td class="date-cell">${dash(fmt(t._execStart))}</td>
+        <td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>
+        <td class="date-cell">${dash(t.leadTimeRequested)}</td>
+        <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
+        <td class="date-cell">${agingText ? `<span style="color:var(--rag-red)">${agingText}</span>` : dash(t.aging === 0 ? '0' : '')}</td>
+        <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
+        <td class="bar-col">
+          <div class="bar-outer">
+            ${gridLines}
+            ${mLines}
+            <div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
+            ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} -> ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
+            ${progressHTML}
+            ${todayLine}
+            ${agingHTML}
+            ${taskDiamond}
+          </div>
+        </td>
+      </tr>`;
+    });
+  });
+
+  html += `</tbody></table>`;
+
+  const zoomEl = document.getElementById('zoom-bar');
+  if (zoomEl) zoomEl.innerHTML = zoomBarHTML;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('table-wrap').style.display = 'block';
+  document.getElementById('table-wrap').innerHTML = html;
+}
+
 function renderTable() {
+  if (viewMode === 'execution') {
+    renderExecutionTable();
+    return;
+  }
+
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
