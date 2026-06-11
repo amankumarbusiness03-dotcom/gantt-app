@@ -72,6 +72,7 @@ body {
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); animation: pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.execution-filter { display: none; }
 select {
   background: var(--surface);
   border: 1px solid var(--border2);
@@ -557,6 +558,9 @@ td {
         <option value="Phase 2">Phase 2</option>
       </select>
       <select id="ownerFilter"><option value="">all owners</option></select>
+      <select id="accountableFilter" class="execution-filter"><option value="">all accountable</option></select>
+      <select id="statusFilter" class="execution-filter"><option value="">all status</option></select>
+      <select id="priorityFilter" class="execution-filter"><option value="">all priority</option></select>
     </div>
     <button class="refresh-btn" id="viewToggle" onclick="toggleViewMode()" title="show execution tracking view">execution view</button>
     <button class="refresh-btn" onclick="loadData()">↻ refresh</button>
@@ -590,11 +594,6 @@ td {
 <div class="ms-panel-body" id="ms-panel-body">
   <div class="ms-panel-body-inner">
     <span id="ms-list" style="display:flex;flex-wrap:wrap;gap:6px"></span>
-    <span style="display:inline-flex;align-items:center;gap:4px;margin-left:4px">
-      <input id="ms-name" type="text" placeholder="name" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;width:110px;outline:none"/>
-      <input id="ms-date" type="date" style="background:var(--surface);border:1px solid var(--border2);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:4px;outline:none"/>
-      <button data-action="add-ms" style="background:rgba(255,220,100,0.1);border:1px solid rgba(255,220,100,0.4);color:rgba(255,220,100,0.9);font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:4px;cursor:pointer">+ add</button>
-    </span>
   </div>
 </div>
 <div id="zoom-bar"></div>
@@ -609,6 +608,7 @@ td {
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const SHEET_CSV_URL = window.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv';
 const MASTER_SHEET_CSV_URL = window.MASTER_SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851';
+const MILESTONES_CSV_URL = window.MILESTONES_CSV_URL || 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=249722363';
 
 // ── DEMO DATA ─────────────────────────────────────────────────────────────────
 const DEMO_TASKS = [
@@ -713,6 +713,7 @@ let masterTasks = [];
 let executionTasks = [];
 let executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
 let masterSheetLoadError = '';
+let milestoneSheetLoadError = '';
 let usingDemo = false;
 let viewMode = 'planning';
 
@@ -959,6 +960,7 @@ function parseCSV(text) {
   const endCol    = col('end date', 'end', 'finish date', 'finish', 'due date', 'due', 'to', 'target date', 'completion date', 'complete');
   const ownerCol  = col('responsible', 'owner', 'r name', 'r - name', 'accountable', 'assigned to', 'assignee', 'person', 'name');
   const statusCol = col('status', 'progress', 'state', 'completion');
+  const priorityCol = col('priority');
 
   console.log('[RASIC] Column indices — phase:', phaseCol, 'func:', funcCol, 'act:', actCol, 'start:', startCol, 'end:', endCol, 'owner:', ownerCol, 'status:', statusCol);
   // Guard: if we can't find activity column or at least one date column, bail out clearly
@@ -1003,6 +1005,7 @@ function parseCSV(text) {
     // Sanitise status — reject if it looks like a date or name
     let rawStatus = statusCol >= 0 ? (cells[statusCol] || '').trim() : '';
     if (/^\d/.test(rawStatus) || rawStatus.length > 30) rawStatus = '';
+    const rawPriority = priorityCol >= 0 ? (cells[priorityCol] || '').trim() : '';
 
     tasks.push({
       phase:    rowPhase || currentPhase,
@@ -1012,6 +1015,7 @@ function parseCSV(text) {
       end,
       owner:  rawOwner,
       status: rawStatus,
+      priority: rawPriority,
     });
   }
   console.log(`[RASIC] Parsed ${tasks.length} tasks | skipped no-activity: ${skippedNoActivity} | skipped no-date: ${skippedNoDate}`);
@@ -1106,7 +1110,7 @@ function parseMasterCSV(text) {
       leadTimeRequested: leadTimeCol >= 0 ? clean(cells[leadTimeCol]) : '',
       revisedEndDate: fixDate(revisedEndCol >= 0 ? cells[revisedEndCol] : ''),
       actualEndDate: fixDate(actualEndCol >= 0 ? cells[actualEndCol] : ''),
-      aging: agingCol >= 0 ? parseNumber(cells[agingCol]) : '',
+      aging: agingCol >= 0 ? clean(cells[agingCol]) : '',
       responsible: respCol >= 0 ? clean(cells[respCol]) : '',
       accountable: acctCol >= 0 ? clean(cells[acctCol]) : '',
       status: statusCol >= 0 ? clean(cells[statusCol]) : '',
@@ -1136,11 +1140,102 @@ async function loadMasterSheetData() {
     masterTasks = parsed;
     masterSheetLoadError = '';
     syncExecutionTasks();
+    if (viewMode === 'execution' && allTasks.length) renderAll();
   } catch (e) {
     masterTasks = [];
     masterSheetLoadError = e.message;
     syncExecutionTasks();
+    if (viewMode === 'execution' && allTasks.length) renderAll();
     console.warn('[MASTER] Background load failed:', e);
+  }
+}
+
+function parseMilestonesCSV(text) {
+  text = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rawLines = text.trim().split('\n');
+  const rows = [];
+
+  const clean = v => (v || '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  const norm = s => clean(s).toLowerCase().replace(/[\s\-_\/]+/g, ' ');
+
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rawLines.length, 15); i++) {
+    const cells = parseCSVLine(rawLines[i]).map(norm);
+    const hasName = cells.some(h => h.includes('milestone') || h === 'name');
+    const hasDate = cells.some(h => h === 'date' || h.includes('target date'));
+    if (hasName && hasDate) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+
+  const headers = parseCSVLine(rawLines[headerIdx]).map(norm);
+  const col = (...names) => {
+    for (const name of names) {
+      const n = norm(name);
+      let idx = headers.findIndex(h => h === n);
+      if (idx >= 0) return idx;
+      idx = headers.findIndex(h => h.includes(n));
+      if (idx >= 0) return idx;
+      idx = headers.findIndex(h => n.split(' ').every(w => h.includes(w)));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const nameCol = col('milestone name', 'name', 'milestone');
+  const funcCol = col('function');
+  const dateCol = col('date', 'target date');
+  const ownerCol = col('owner', 'responsible');
+  const statusCol = col('status');
+  const remarksCol = col('remarks', 'remark');
+
+  console.log('[MILESTONES] Headers detected:', headers);
+  if (nameCol < 0 || dateCol < 0) {
+    console.warn('[MILESTONES] Could not identify required Milestone Name + Date columns. Headers found:', headers);
+    return null;
+  }
+
+  for (let i = headerIdx + 1; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (!line.trim()) continue;
+    const cells = parseCSVLine(line);
+    const label = clean(cells[nameCol]);
+    const date = fixDate(cells[dateCol]);
+    if (!label || !date) continue;
+    rows.push({
+      label,
+      date,
+      func: funcCol >= 0 ? clean(cells[funcCol]) : '',
+      owner: ownerCol >= 0 ? clean(cells[ownerCol]) : '',
+      status: statusCol >= 0 ? clean(cells[statusCol]) : '',
+      remarks: remarksCol >= 0 ? clean(cells[remarksCol]) : '',
+    });
+  }
+
+  rows.sort((a,b)=>a.date.localeCompare(b.date));
+  console.log(`[MILESTONES] Parsed ${rows.length} milestones`);
+  return rows.length ? rows : null;
+}
+
+async function loadMilestoneSheetData() {
+  if (!MILESTONES_CSV_URL || MILESTONES_CSV_URL === 'YOUR_MILESTONES_CSV_URL_HERE') {
+    milestoneSheetLoadError = '';
+    return;
+  }
+
+  try {
+    const url = MILESTONES_CSV_URL + (MILESTONES_CSV_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const parsed = parseMilestonesCSV(text);
+    if (!parsed) throw new Error('could not parse MILESTONES sheet');
+    milestones = parsed;
+    milestoneSheetLoadError = '';
+    renderMilestoneList();
+    if (allTasks.length) renderTable();
+  } catch (e) {
+    milestoneSheetLoadError = e.message;
+    console.warn('[MILESTONES] Background load failed:', e);
   }
 }
 
@@ -1159,6 +1254,7 @@ async function loadData() {
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
   loadMasterSheetData();
+  loadMilestoneSheetData();
 
   if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
     usingDemo = true; allTasks = DEMO_TASKS;
@@ -1245,14 +1341,12 @@ function renderMilestoneList() {
   const list = document.getElementById('ms-list');
   if (!list) return;
   const ms = getMilestones();
-  // Update count badge
   const countEl = document.getElementById('ms-count');
   if (countEl) countEl.textContent = ms.length;
-  list.innerHTML = ms.map((m,i) => `
+  list.innerHTML = ms.map(m => `
     <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,220,100,0.08);border:1px solid rgba(255,220,100,0.3);border-radius:4px;padding:2px 6px;font-size:10px;font-family:var(--mono);color:rgba(255,220,100,0.9)">
-      ${m.label} <span style="color:var(--text3)">${m.date}</span>
-      <button data-action="edit-ms" data-idx="${i}" style="background:none;border:none;color:var(--text3);cursor:pointer;padding:0 2px;font-size:10px" title="edit">✎</button>
-      <button data-action="del-ms" data-idx="${i}" style="background:none;border:none;color:var(--rag-red);cursor:pointer;padding:0 2px;font-size:10px" title="delete">✕</button>
+      ${escapeHTML(m.label)} <span style="color:var(--text3)">${escapeHTML(m.date)}</span>
+      ${m.status ? `<span style="color:var(--text3);border-left:1px solid var(--border2);padding-left:5px">${escapeHTML(m.status)}</span>` : ''}
     </span>
   `).join('');
 }
@@ -1365,11 +1459,32 @@ function renderAll() {
   const sourceTasks = viewMode === 'execution' ? executionTasks : allTasks;
   const funcs  = [...new Set(sourceTasks.map(t=>t.func).filter(Boolean))];
   const owners = [...new Set(sourceTasks.map(t=>viewMode === 'execution' ? t.responsible : t.owner).filter(Boolean))].sort();
+  const accountables = [...new Set(sourceTasks.map(t=>t.accountable).filter(Boolean))].sort();
+  const statuses = [...new Set(sourceTasks.map(t=>t.executionStatus).filter(Boolean))].sort();
+  const priorities = [...new Set(sourceTasks.map(t=>t.priority).filter(Boolean))].sort();
   const funcSel  = document.getElementById('funcFilter');
   const ownerSel = document.getElementById('ownerFilter');
+  const accountableSel = document.getElementById('accountableFilter');
+  const statusSel = document.getElementById('statusFilter');
+  const prioritySel = document.getElementById('priorityFilter');
   const savedFunc = funcSel.value, savedOwner = ownerSel.value;
+  const savedAccountable = accountableSel ? accountableSel.value : '';
+  const savedStatus = statusSel ? statusSel.value : '';
+  const savedPriority = prioritySel ? prioritySel.value : '';
   funcSel.innerHTML  = '<option value="">all functions</option>'  + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
   ownerSel.innerHTML = `<option value="">${viewMode === 'execution' ? 'all responsible' : 'all owners'}</option>` + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
+  if (accountableSel) {
+    accountableSel.style.display = viewMode === 'execution' ? '' : 'none';
+    accountableSel.innerHTML = '<option value="">all accountable</option>' + accountables.map(a=>`<option value="${a}"${a===savedAccountable?' selected':''}>${a}</option>`).join('');
+  }
+  if (statusSel) {
+    statusSel.style.display = viewMode === 'execution' ? '' : 'none';
+    statusSel.innerHTML = '<option value="">all status</option>' + statuses.map(s=>`<option value="${s}"${s===savedStatus?' selected':''}>${s}</option>`).join('');
+  }
+  if (prioritySel) {
+    prioritySel.style.display = viewMode === 'execution' ? '' : 'none';
+    prioritySel.innerHTML = '<option value="">all priority</option>' + priorities.map(p=>`<option value="${p}"${p===savedPriority?' selected':''}>${p}</option>`).join('');
+  }
   renderTable();
 }
 
@@ -1416,12 +1531,18 @@ function renderExecutionTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selResponsible = document.getElementById('ownerFilter').value;
+  const selAccountable = document.getElementById('accountableFilter').value;
+  const selStatus = document.getElementById('statusFilter').value;
+  const selPriority = document.getElementById('priorityFilter').value;
   if (selResponsible !== activeOwner) activeOwner = selResponsible;
 
   let tasks = executionTasks.filter(t => {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
     if (activeOwner && t.responsible !== activeOwner) return false;
+    if (selAccountable && t.accountable !== selAccountable) return false;
+    if (selStatus && t.executionStatus !== selStatus) return false;
+    if (selPriority && t.priority !== selPriority) return false;
     return true;
   }).map(t => {
     const execStart = t.startDate || t.planningStart || t.start;
@@ -1536,8 +1657,9 @@ function renderExecutionTable() {
   const msHealthData = visibleMilestones.map(m => {
     const msDate = parseLocalDate(m.date);
     const relatedTasks = msDate ? tasks.filter(t => {
+      const sameFunc = !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func);
       const ed = parseLocalDate(t._execEnd);
-      return ed && ed <= msDate;
+      return sameFunc && ed && ed <= msDate;
     }) : [];
     const overdue = relatedTasks.filter(t => t._rag === 'red').length;
     const atRisk  = relatedTasks.filter(t => t._rag === 'amber').length;
@@ -1558,6 +1680,10 @@ function renderExecutionTable() {
           data-ms-type="gate"
           data-ms-label="${escapeHTML(m.label)}"
           data-ms-date="${m.date}"
+          data-ms-function="${escapeHTML(m.func || '')}"
+          data-ms-owner="${escapeHTML(m.owner || '')}"
+          data-ms-status="${escapeHTML(m.status || '')}"
+          data-ms-remarks="${escapeHTML(m.remarks || '')}"
           data-ms-days="${health.daysLeft}"
           data-ms-total="${health.total}"
           data-ms-overdue="${health.overdue}"
@@ -1640,16 +1766,10 @@ function renderExecutionTable() {
         ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
         : '';
 
-      const agingVal = Number(t.aging);
-      const agingText = Number.isFinite(agingVal) && agingVal > 0 ? `+${Math.round(agingVal)}d` : '';
-      const agingHTML = agingText
-        ? `<span style="position:absolute;left:${totalSeg.endPct.toFixed(2)}%;top:50%;transform:translate(6px,-50%);font-family:var(--mono);font-size:9px;color:var(--rag-red);z-index:12;white-space:nowrap">${agingText}</span>`
-        : '';
-
       const gridLines = majorTicks.map(tk =>
         `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
       ).join('');
-      const mLines = visibleMilestones.map(m =>
+      const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
         `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
       ).join('');
       const todayLine = (todayPct>=0 && todayPct<=100)
@@ -1683,7 +1803,7 @@ function renderExecutionTable() {
         <td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>
         <td class="date-cell">${dash(t.leadTimeRequested)}</td>
         <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
-        <td class="date-cell">${agingText ? `<span style="color:var(--rag-red)">${agingText}</span>` : dash(t.aging === 0 ? '0' : '')}</td>
+        <td class="date-cell">${dash(t.aging)}</td>
         <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
         <td class="bar-col">
           <div class="bar-outer">
@@ -1693,7 +1813,6 @@ function renderExecutionTable() {
             ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} -> ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
             ${progressHTML}
             ${todayLine}
-            ${agingHTML}
             ${taskDiamond}
           </div>
         </td>
@@ -1842,8 +1961,9 @@ function renderTable() {
   const msHealthData = visibleMilestones.map(m => {
     const msDate = parseLocal(m.date);
     const relatedTasks = msDate ? tasks.filter(t => {
+      const sameFunc = !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func);
       const ed = parseLocal(t.end);
-      return ed && ed <= msDate;
+      return sameFunc && ed && ed <= msDate;
     }) : [];
     const overdue = relatedTasks.filter(t => t._rag === 'red').length;
     const atRisk  = relatedTasks.filter(t => t._rag === 'amber').length;
@@ -1862,8 +1982,12 @@ function renderTable() {
         const health = msHealthData[i];
         return `<div class="ms-flag-hit" style="position:absolute;left:${m.p.toFixed(2)}%;top:${yo}px;transform:translateX(-1.5px);z-index:12;padding:0 8px 0 0;"
           data-ms-type="gate"
-          data-ms-label="${m.label.replace(/"/g,'&quot;')}"
+          data-ms-label="${escapeHTML(m.label)}"
           data-ms-date="${m.date}"
+          data-ms-function="${escapeHTML(m.func || '')}"
+          data-ms-owner="${escapeHTML(m.owner || '')}"
+          data-ms-status="${escapeHTML(m.status || '')}"
+          data-ms-remarks="${escapeHTML(m.remarks || '')}"
           data-ms-days="${health.daysLeft}"
           data-ms-total="${health.total}"
           data-ms-overdue="${health.overdue}"
@@ -1940,7 +2064,7 @@ function renderTable() {
       ).join('');
 
       // Milestone pole lines — solid thin gold, continuation of the flag’s pole
-      const mLines = visibleMilestones.map(m =>
+      const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
         `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
       ).join('');
 
@@ -2002,7 +2126,7 @@ function drillMonth(date) { zoomMode = 'month'; zoomMonth = date; renderTable();
 function drillBack()       { zoomMode = 'overview'; zoomMonth = null; renderTable(); }
 
 // Wire filters
-['funcFilter','phaseFilter','ownerFilter'].forEach(id => {
+['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
   document.getElementById(id).addEventListener('change', renderTable);
 });
 // Sync ownerFilter dropdown -> activeOwner state
@@ -2060,6 +2184,10 @@ document.body.addEventListener('click', function(e) {
     if (type === 'gate') {
       const label   = el.dataset.msLabel;
       const date    = el.dataset.msDate;
+      const func    = el.dataset.msFunction || '';
+      const owner   = el.dataset.msOwner || '';
+      const sheetStatus = el.dataset.msStatus || '';
+      const remarks = el.dataset.msRemarks || '';
       const days    = parseInt(el.dataset.msDays, 10);
       const total   = parseInt(el.dataset.msTotal, 10);
       const overdue = parseInt(el.dataset.msOverdue, 10);
@@ -2078,9 +2206,13 @@ document.body.addEventListener('click', function(e) {
       else                { daysText = Math.abs(days) + ' day' + (Math.abs(days)!==1?'s':'') + ' overdue'; daysClass = 'red'; }
 
       html = `
-        <div class="ms-tooltip-title">🚩 ${label}</div>
+        <div class="ms-tooltip-title">🚩 ${escapeHTML(label)}</div>
         <div class="ms-tooltip-divider"></div>
         <div class="ms-tooltip-row"><span class="label">📅 Date</span><span class="value">${fmtDate}</span></div>
+        ${func ? `<div class="ms-tooltip-row"><span class="label">Function</span><span class="value">${escapeHTML(func)}</span></div>` : ''}
+        ${owner ? `<div class="ms-tooltip-row"><span class="label">Owner</span><span class="value">${escapeHTML(owner)}</span></div>` : ''}
+        ${sheetStatus ? `<div class="ms-tooltip-row"><span class="label">Sheet Status</span><span class="value">${escapeHTML(sheetStatus)}</span></div>` : ''}
+        ${remarks ? `<div class="ms-tooltip-row"><span class="label">Remarks</span><span class="value">${escapeHTML(remarks)}</span></div>` : ''}
         <div class="ms-tooltip-row"><span class="label">⏱ Status</span><span class="value ${daysClass}">${daysText}</span></div>
         <div class="ms-tooltip-row"><span class="label">📊 Tasks</span><span class="value">${total} due before this gate</span></div>
         ${(overdue || atRisk) ? `<div class="ms-tooltip-row" style="margin-top:4px;gap:4px">
