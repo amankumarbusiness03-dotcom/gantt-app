@@ -728,6 +728,11 @@ function syncViewToggle() {
 
 function toggleViewMode() {
   viewMode = viewMode === 'planning' ? 'execution' : 'planning';
+  // Reset owner filter so an execution-view "responsible" name doesn't bleed
+  // into planning-view owner filtering and vice-versa.
+  activeOwner = '';
+  const ownerSel = document.getElementById('ownerFilter');
+  if (ownerSel) ownerSel.value = '';
   syncViewToggle();
   renderAll();
 }
@@ -1296,46 +1301,14 @@ function setStatus(text, live) {
   document.getElementById('status-dot').style.background = live ? 'var(--done)' : 'var(--p2)';
 }
 
-// ── MILESTONES — mutable, user-configurable ──────────────────────────────────
-const DEFAULT_MILESTONES = [
-  { date: '2026-04-30', label: 'Regulatory Deadline' },
-  { date: '2026-06-15', label: 'Machines In' },
-  { date: '2026-08-15', label: 'FAI Done' },
-  { date: '2026-10-31', label: 'PPAP Submit' },
-];
-let milestones = DEFAULT_MILESTONES.map(m => ({...m}));
+// ── MILESTONES — sheet-driven, read-only in app ───────────────────────────────
+// Initialized empty; populated by loadMilestoneSheetData() from the MILESTONES tab.
+let milestones = [];
 
-function getMilestones() { return milestones.length ? milestones : DEFAULT_MILESTONES.map(m=>({...m})); }
+function getMilestones() { return milestones; }
 
-function addMilestone() {
-  const label = document.getElementById('ms-name').value.trim();
-  const date  = document.getElementById('ms-date').value.trim();
-  if (!label || !date) return;
-  milestones.push({ label, date });
-  milestones.sort((a,b)=>a.date.localeCompare(b.date));
-  document.getElementById('ms-name').value = '';
-  document.getElementById('ms-date').value = '';
-  renderMilestoneList();
-  renderTable();
-}
-
-function deleteMilestone(idx) {
-  milestones.splice(idx, 1);
-  renderMilestoneList();
-  renderTable();
-}
-
-function editMilestone(idx) {
-  const m = milestones[idx];
-  const newLabel = prompt('Milestone name:', m.label);
-  if (newLabel === null) return;
-  const newDate  = prompt('Date (YYYY-MM-DD):', m.date);
-  if (newDate === null) return;
-  milestones[idx] = { label: newLabel.trim() || m.label, date: newDate.trim() || m.date };
-  milestones.sort((a,b)=>a.date.localeCompare(b.date));
-  renderMilestoneList();
-  renderTable();
-}
+// addMilestone / deleteMilestone / editMilestone removed — milestones are now
+// sheet-driven (MILESTONES tab). Edit the Google Sheet directly.
 
 function renderMilestoneList() {
   const list = document.getElementById('ms-list');
@@ -1343,10 +1316,29 @@ function renderMilestoneList() {
   const ms = getMilestones();
   const countEl = document.getElementById('ms-count');
   if (countEl) countEl.textContent = ms.length;
+
+  if (!ms.length) {
+    list.innerHTML = `<span style="font-size:10px;font-family:var(--mono);color:var(--text3);font-style:italic">
+      ${milestoneSheetLoadError ? '⚠ ' + escapeHTML(milestoneSheetLoadError) : 'loading milestones from sheet…'}
+    </span>`;
+    return;
+  }
+
+  // Status → colour map for the status badge
+  const statusColor = s => {
+    const sl = (s || '').toLowerCase();
+    if (sl === 'completed' || sl === 'done') return 'var(--rag-green)';
+    if (sl === 'delayed' || sl === 'overdue') return 'var(--rag-red)';
+    if (sl === 'at risk') return 'var(--rag-amber)';
+    return 'var(--text3)';
+  };
+
   list.innerHTML = ms.map(m => `
-    <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,220,100,0.08);border:1px solid rgba(255,220,100,0.3);border-radius:4px;padding:2px 6px;font-size:10px;font-family:var(--mono);color:rgba(255,220,100,0.9)">
-      ${escapeHTML(m.label)} <span style="color:var(--text3)">${escapeHTML(m.date)}</span>
-      ${m.status ? `<span style="color:var(--text3);border-left:1px solid var(--border2);padding-left:5px">${escapeHTML(m.status)}</span>` : ''}
+    <span title="${m.func ? escapeHTML(m.func) + ' · ' : ''}${m.owner ? 'Owner: ' + escapeHTML(m.owner) : ''}" style="display:inline-flex;align-items:center;gap:4px;background:rgba(255,220,100,0.08);border:1px solid rgba(255,220,100,0.3);border-radius:4px;padding:2px 6px;font-size:10px;font-family:var(--mono);color:rgba(255,220,100,0.9);cursor:default">
+      ${escapeHTML(m.label)}
+      <span style="color:var(--text3)">${escapeHTML(m.date)}</span>
+      ${m.owner ? `<span style="color:var(--text3);border-left:1px solid var(--border2);padding-left:5px">${escapeHTML(m.owner)}</span>` : ''}
+      ${m.status ? `<span style="color:${statusColor(m.status)};border-left:1px solid var(--border2);padding-left:5px">${escapeHTML(m.status)}</span>` : ''}
     </span>
   `).join('');
 }
@@ -1510,7 +1502,9 @@ function parseLocalDate(s) {
 }
 
 function executionRagStatus(t) {
-  const status = (t.executionStatus || t.status || '').toLowerCase().trim();
+  // Only use executionStatus (from Master Sheet). Do NOT fall back to planning
+  // t.status — their vocabularies differ and it causes wrong RAG colours.
+  const status = (t.executionStatus || '').toLowerCase().trim();
   const endDate = parseLocalDate(t.revisedEndDate || t.plannedEndDate || t.actualEndDate || t.planningEnd || t.end);
   const today = new Date(); today.setHours(0,0,0,0);
 
@@ -1557,6 +1551,14 @@ function renderExecutionTable() {
   const doneCount  = tasks.filter(t => t._rag === 'green').length;
   const ph1        = tasks.filter(t => t.phase === 'Phase 1').length;
 
+  const matchedBadge = executionMergeStats.total > 0
+    ? `<div class="stat"><div class="stat-val" style="color:var(--rag-green)">${executionMergeStats.matched}</div><div class="stat-lbl">master matched</div></div>
+       <div class="stat"><div class="stat-val" style="color:var(--text3)">${executionMergeStats.unmatchedPlanning}</div><div class="stat-lbl">no master data</div></div>`
+    : '';
+  const masterErrBadge = masterSheetLoadError
+    ? `<div class="stat" style="border-color:rgba(247,95,95,0.35)"><div class="stat-val" style="font-size:10px;color:var(--rag-red)">⚠</div><div class="stat-lbl" style="color:var(--rag-red)">master sheet error</div></div>`
+    : '';
+
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="stat-val">${total}</div><div class="stat-lbl">total tasks</div></div>
     <div class="stat rag-red"><div class="stat-val" style="color:var(--rag-red)">${redCount}</div><div class="stat-lbl">overdue</div></div>
@@ -1564,6 +1566,8 @@ function renderExecutionTable() {
     <div class="stat"><div class="stat-val" style="color:var(--rag-green)">${doneCount}</div><div class="stat-lbl">done</div></div>
     <div class="stat"><div class="stat-val">${ph1}</div><div class="stat-lbl">phase 1</div></div>
     <div class="stat"><div class="stat-val" style="color:var(--p2)">${total-ph1}</div><div class="stat-lbl">phase 2</div></div>
+    ${matchedBadge}
+    ${masterErrBadge}
   `;
 
   const fmt = s => {
@@ -1633,7 +1637,7 @@ function renderExecutionTable() {
     const endMo = new Date(Math.max(...allD));
     while (td3 <= endMo) { months.push(new Date(td3)); td3.setMonth(td3.getMonth()+1); }
     zoomBarHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 28px;border-bottom:1px solid var(--border);flex-wrap:wrap;background:var(--surface2)">
-      <span style="font-size:10px;font-family:var(--mono);color:var(--text3);margin-right:4px">drill into month -></span>
+      <span style="font-size:10px;font-family:var(--mono);color:var(--text3);margin-right:4px">drill into month →</span>
       ${months.map(m=>{
         const label = m.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
         const isToday = today.getMonth()===m.getMonth()&&today.getFullYear()===m.getFullYear();
@@ -1794,7 +1798,7 @@ function renderExecutionTable() {
 
       html += `<tr${isCollapsed?' style="display:none"':''}>
         <td class="activity-cell">
-          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
+          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
         <td>${t.responsible
           ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
           : '<span style="color:var(--text3)">-</span>'}</td>
@@ -1810,7 +1814,7 @@ function renderExecutionTable() {
             ${gridLines}
             ${mLines}
             <div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
-            ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} -> ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
+            ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
             ${progressHTML}
             ${todayLine}
             ${taskDiamond}
@@ -2036,10 +2040,10 @@ function renderTable() {
 
     // Section row — data-action attribute, handled by delegated listener
     html += `<tr class="section-row${isCollapsed?' collapsed':''}">
-      <td colspan="6" data-action="toggle-func" data-func='${f.replace(/\x27/g,"&#39;")}' style="cursor:pointer">
+      <td colspan="6" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
         <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
         <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
-        ${f}
+        ${escapeHTML(f)}
         ${ragSummary}
       </td>
     </tr>`;
@@ -2073,7 +2077,7 @@ function renderTable() {
         ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
         : '';
 
-      const tip = `${t.activity} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+t.owner:''}`;
+      const tip = `${escapeHTML(t.activity)} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+escapeHTML(t.owner):''}`;
       const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
 
       // Task-linked milestone state
@@ -2093,11 +2097,11 @@ function renderTable() {
 
       html += `<tr${isCollapsed?' style="display:none"':''}>
         <td class="activity-cell">
-          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${msKey.replace(/"/g,'&quot;')}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${t.activity}</td>
+          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
         <td>${t.owner
-          ? `<span class="owner-pill${ownerActive}" data-action="filter-owner" data-owner="${t.owner}" title="click to filter by ${t.owner}">${t.owner}</span>`
+          ? `<span class="owner-pill${ownerActive}" data-action="filter-owner" data-owner="${escapeHTML(t.owner)}" title="click to filter by ${escapeHTML(t.owner)}">${escapeHTML(t.owner)}</span>`
           : '<span style="color:var(--text3)">—</span>'}</td>
-        <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${t.phase}</span></td>
+        <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${escapeHTML(t.phase)}</span></td>
         <td class="date-cell">${fmt(t.start)}</td>
         <td class="date-cell">${fmt(t.end)}</td>
         <td class="bar-col">
@@ -2140,16 +2144,7 @@ document.body.addEventListener('click', function(e) {
   if (!el) return;
   const action = el.dataset.action;
 
-  if (action === 'add-ms') {
-    addMilestone();
-
-  } else if (action === 'del-ms') {
-    deleteMilestone(parseInt(el.dataset.idx, 10));
-
-  } else if (action === 'edit-ms') {
-    editMilestone(parseInt(el.dataset.idx, 10));
-
-  } else if (action === 'filter-owner') {
+  if (action === 'filter-owner') {
     e.stopPropagation();
     filterByOwner(el.dataset.owner);
 
