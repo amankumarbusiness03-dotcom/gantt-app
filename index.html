@@ -1158,7 +1158,7 @@ async function loadData() {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
-  loadMasterSheetData();
+  await loadMasterSheetData();
 
   if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
     usingDemo = true; allTasks = DEMO_TASKS;
