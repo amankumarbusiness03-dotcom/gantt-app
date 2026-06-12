@@ -142,7 +142,38 @@ select:hover, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px 
 .stat:hover { border-color: var(--border2); transform: translateY(-1px); }
 .stat-val { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); }
 .stat-lbl { font-size: 10px; color: var(--text3); margin-top: 2px; font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
-.table-wrap { overflow-x: auto; }
+.table-wrap {
+  overflow: hidden;
+  max-height: calc(100vh - 240px);
+  display: flex;
+  flex-direction: column;
+}
+.split-grid {
+  display: flex;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.meta-pane {
+  width: 40%;
+  flex: 0 0 40%;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  border-right: 1px solid var(--border2);
+}
+.timeline-pane {
+  width: 60%;
+  flex: 0 0 60%;
+  overflow-x: auto;
+  overflow-y: scroll;
+}
+.meta-pane table, .timeline-pane table { width: 100%; border-collapse: collapse; }
+.meta-pane table { min-width: 100%; }
+.timeline-pane table { min-width: 600px; }
+/* Hide the meta-pane's own vertical scrollbar visually but keep it scrollable & synced */
+.meta-pane::-webkit-scrollbar { width: 0px; }
+.meta-pane { scrollbar-width: none; }
 table { width: 100%; border-collapse: collapse; min-width: 1000px; }
 thead th {
   font-family: var(--mono);
@@ -167,6 +198,7 @@ td {
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
   color: var(--text);
+  height: 30px;
 }
 .section-row td {
   background: rgba(28,33,50,0.75);
@@ -183,6 +215,7 @@ td {
   position: sticky;
   top: 40px;
   z-index: 9;
+  height: auto;
 }
 .section-row td span { display: inline-block; margin-right: 8px; color: var(--text3); }
 .phase-badge {
@@ -1630,24 +1663,35 @@ function toggleFunc(funcName, tdEl) {
   }
 }
 
-// ── RAG LOGIC — single source of truth ───────────────────────────────────────
+// ── RAG LOGIC — single unified source of truth ────────────────────────────
+// Overdue (red): structural deadline date < today AND status text does not
+//   equal/include 'done' or 'complete'. Hard dates override text status.
+// At Risk (amber): not completed AND structural start date <= today + 3 days.
+function unifiedRagCheck(statusText, endDate, startDate) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const status = (statusText || '').toLowerCase().trim();
+  const isDone = status === 'done' || status.includes('complete');
+
+  if (isDone) return 'green';
+  if (status === 'in_progress' || status.includes('progress')) {
+    // still check hard-date overdue override below for in-progress tasks
+    if (endDate && endDate < today) return 'red';
+    return 'blue';
+  }
+  if (endDate && endDate < today) return 'red';
+
+  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
+  if (startDate && startDate <= today3) return 'amber';
+  if (!endDate) return 'grey';
+  return 'grey';
+}
+
 function ragStatus(t) {
   const parseLocal = s => { if(!s) return null; const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
-  const today = new Date(); today.setHours(0,0,0,0);
-  const status = (t.status||'').toLowerCase().trim();
   const endDate   = parseLocal(t.end);
   const startDate = parseLocal(t.start);
   if (!endDate) return 'grey';
-  // done
-  if (status === 'done' || status.includes('complete')) return 'green';
-  // in_progress
-  if (status === 'in_progress' || status.includes('progress')) return 'blue';
-  // overdue: end < today AND not done
-  if (endDate < today) return 'red';
-  // atRisk: start <= today+3 AND status is not_started (or empty)
-  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
-  if (startDate && startDate <= today3) return 'amber';
-  return 'grey';
+  return unifiedRagCheck(t.status, endDate, startDate);
 }
 
 function ragColor(rag) {
@@ -1658,6 +1702,7 @@ function ragColor(rag) {
 function ragClass(rag) {
   return rag === 'red' ? 'rag-red' : rag === 'amber' ? 'rag-amber' : '';
 }
+
 
 // ── OWNER FILTER — global state, pill-click toggle ───────────────────────────
 let activeOwner = '';
@@ -1761,23 +1806,11 @@ function parseLocalDate(s) {
 }
 
 function executionRagStatus(t) {
-  // Only use executionStatus (from Master Sheet). Do NOT fall back to planning
-  // t.status — their vocabularies differ and it causes wrong RAG colours.
-  const status = (t.executionStatus || '').toLowerCase().trim();
-  const endDate = parseLocalDate(t.revisedEndDate || t.plannedEndDate || t.actualEndDate || t.planningEnd || t.end);
-  const today = new Date(); today.setHours(0,0,0,0);
-
-  if (status.includes('overdue')) return 'red';
-  if (status.includes('due within') || status.includes('at risk')) return 'amber';
-  if (status.includes('complete') || status === 'done') return 'green';
-  if (status.includes('progress')) return 'blue';
-  if (status.includes('not started')) return 'grey';
-  if (!endDate) return 'grey';
-
-  const daysToEnd = (endDate - today) / 86400000;
-  if (endDate < today) return 'red';
-  if (daysToEnd <= 3) return 'amber';
-  return 'grey';
+  // Structural deadline: revisedEndDate, falling back to plannedEndDate.
+  const endDate = parseLocalDate(t.revisedEndDate || t.plannedEndDate);
+  const startDate = parseLocalDate(t.startDate || t.planningStart || t.start);
+  const statusText = t.executionStatus || '';
+  return unifiedRagCheck(statusText, endDate, startDate);
 }
 
 function renderExecutionTable() {
