@@ -3010,8 +3010,137 @@ function buildReportDocument() {
   }
 
   const noteBlockHTML = note
-    ? `<div class="dash-card" style="margin-bottom:14px"><div class="dash-card-title">Executive Notes</div><div style="font-size:12px;line-height:1.6;color:var(--text);white-space:pre-wrap">${escapeHTML(note)}</div></div>`
+    ? `<div class="dash-card report-exec-notes" style="margin-bottom:14px"><div class="dash-card-title">Executive Notes</div><div style="font-size:12px;line-height:1.6;color:var(--text);white-space:pre-wrap">${escapeHTML(note)}</div></div>`
     : '';
+
+  // ── Executive print stylesheet ───────────────────────────────────────────
+  // Converts the dark workspace theme into a clean, CEO-ready light document
+  // for printing / Save-as-PDF, without touching the on-screen dashboard.
+  const printStyles = `
+@media print {
+  * { box-shadow: none !important; text-shadow: none !important; filter: none !important; }
+
+  html, body {
+    background: #ffffff !important;
+    color: #111827 !important;
+    font-family: 'IBM Plex Sans', Arial, sans-serif !important;
+  }
+
+  /* ── Backgrounds & textiles ── */
+  .dash-card, .report-toolbar, .gate-card, .kpi-block, .breach-item, .rank-row,
+  .completion-sub, #report-body {
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  .dash-card, .gate-card, .kpi-block, .breach-item, .report-toolbar {
+    border: 1px solid #e5e7eb !important;
+    background: #ffffff !important;
+  }
+  .gate-card.high-risk { background: #fef2f2 !important; border-color: #fca5a5 !important; }
+  .kpi-block.overdue { background: #fef2f2 !important; }
+  .kpi-block.atrisk  { background: #fffbeb !important; }
+  .kpi-block.done    { background: #ecfdf5 !important; }
+  .breach-item { background: #fef2f2 !important; border-color: #fca5a5 !important; }
+
+  /* ── Text & headings ── */
+  body, .dash-card-title, .dash-section-label, .rank-name, .breach-item-name,
+  .gate-name, .completion-sub, .kpi-lbl, .stat-lbl, .report-print-title,
+  .report-print-sub, .breach-item-meta, .gate-date, .gate-stats, .slippage-sub,
+  .rank-counts, .completion-ring-num text, text {
+    color: #111827 !important;
+    fill: #111827 !important;
+  }
+  .dash-card-title, .dash-section-label, .kpi-lbl, .stat-lbl,
+  .breach-item-meta, .gate-date, .report-print-sub, .rank-counts {
+    color: #6b7280 !important;
+  }
+  .dash-section-label::after { background: #e5e7eb !important; }
+
+  /* ── Color standardization (neon -> print-safe solids) ── */
+  .kpi-block.overdue .kpi-num, .rank-bar-seg.red, .breach-tag,
+  .gate-stats span[style*="rag-red"], .gate-risk-flag,
+  .kpi-num.overdue, [style*="var(--rag-red)"] {
+    color: #991b1b !important;
+    background: transparent !important;
+    border-color: #991b1b !important;
+  }
+  .kpi-block.atrisk .kpi-num, .rank-bar-seg.amber, .slippage-num,
+  .gate-stats span[style*="rag-amber"], [style*="var(--rag-amber)"] {
+    color: #92400e !important;
+    background: transparent !important;
+  }
+  .kpi-block.done .kpi-num, .rank-bar-seg.grey,
+  [style*="var(--rag-green)"], circle[stroke*="rag-green"] {
+    color: #065f46 !important;
+  }
+  .rank-bar-seg.red   { background: #991b1b !important; }
+  .rank-bar-seg.amber { background: #92400e !important; }
+  .rank-bar-seg.grey  { background: #d1d5db !important; }
+  .rank-bar-track { background: #f3f4f6 !important; }
+  .gate-risk-flag {
+    background: transparent !important;
+    color: #991b1b !important;
+    border: 1px solid #991b1b !important;
+    text-shadow: none !important;
+  }
+  .breach-tag {
+    background: transparent !important;
+    border: 1px solid #991b1b !important;
+    color: #991b1b !important;
+  }
+  /* Completion ring: redraw stroke colors for print */
+  #report-body svg circle[stroke="var(--rag-green)"],
+  #report-body svg circle:nth-of-type(2) {
+    stroke: #065f46 !important;
+  }
+  #report-body svg circle:nth-of-type(1) { stroke: #e5e7eb !important; }
+
+  /* ── Active filter chips: clean monochrome tags ── */
+  .owner-pill {
+    background: transparent !important;
+    border: 1px solid #9ca3af !important;
+    color: #374151 !important;
+  }
+
+  /* ── Fix exception clipping bug: .breach-list ── */
+  .breach-list {
+    max-height: none !important;
+    overflow: visible !important;
+    height: auto !important;
+    position: relative !important;
+  }
+
+  /* ── Strategic page breaks ── */
+  .dash-card, .gate-card, .breach-item, .rank-row, .kpi-block {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .dash-section-label {
+    page-break-before: auto !important;
+    break-before: auto !important;
+    page-break-after: avoid !important;
+  }
+  .report-exec-notes {
+    page-break-before: avoid !important;
+    page-break-after: auto !important;
+  }
+  .dash-grid { display: block !important; }
+  .dash-grid > .dash-card { margin-bottom: 12px !important; width: 100% !important; }
+  .gate-grid { display: block !important; }
+  .gate-grid > .gate-card { margin-bottom: 10px !important; }
+
+  /* ── Clean chrome discard ── */
+  textarea, .report-note, .report-toolbar-right, .report-btn,
+  .dev-stats, .compact-toggle-btn {
+    display: none !important;
+  }
+  .report-toolbar { border: none !important; padding: 0 !important; margin-bottom: 18px !important; }
+  .report-toolbar-left { width: 100% !important; }
+
+  @page { margin: 18mm 14mm; size: A4; }
+}`;
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -3021,15 +3150,22 @@ body { padding: 28px; background: var(--bg); }
 .report-print-header { margin-bottom: 18px; }
 .report-print-title { font-family: var(--mono); font-size: 16px; color: var(--text); margin-bottom: 4px; }
 .report-print-sub { font-family: var(--mono); font-size: 11px; color: var(--text3); }
-@media print {
-  body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@media screen {
+  .print-hint {
+    font-family: var(--mono); font-size: 11px; color: var(--text3);
+    margin-bottom: 14px; padding: 8px 12px; border: 1px solid var(--border2);
+    border-radius: 8px; background: var(--surface);
+  }
 }
+@media print { .print-hint { display: none !important; } }
+${printStyles}
 </style>
 </head><body>
 <div class="report-print-header">
   <div class="report-print-title">PHASE 1 — RASIC GANTT TRACKER · ${isExec ? 'Execution' : 'Planning'} Health Report</div>
   <div class="report-print-sub">Generated ${reportDateStr}</div>
 </div>
+<div class="print-hint">This is the on-screen preview. Use your browser's Print dialog (Ctrl/Cmd+P) and choose "Save as PDF" for the publication-ready executive layout.</div>
 ${noteBlockHTML}
 ${clone.outerHTML}
 </body></html>`;
