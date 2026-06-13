@@ -35,7 +35,28 @@ body {
   color: var(--text);
   font-family: var(--sans);
   font-size: 13px;
-  min-height: 100vh;
+  height: 100vh;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+#app-header {
+  flex: 0 0 auto;
+}
+#app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .header {
   display: flex;
@@ -143,37 +164,11 @@ select:hover, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px 
 .stat-val { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); }
 .stat-lbl { font-size: 10px; color: var(--text3); margin-top: 2px; font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase; }
 .table-wrap {
-  overflow: hidden;
-  max-height: calc(100vh - 240px);
-  display: flex;
-  flex-direction: column;
-}
-.split-grid {
-  display: flex;
-  width: 100%;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
-}
-.meta-pane {
-  width: 40%;
-  flex: 0 0 40%;
-  overflow-y: scroll;
-  overflow-x: hidden;
-  border-right: 1px solid var(--border2);
-}
-.timeline-pane {
-  width: 60%;
-  flex: 0 0 60%;
+  overflow-y: auto;
   overflow-x: auto;
-  overflow-y: scroll;
 }
-.meta-pane table, .timeline-pane table { width: 100%; border-collapse: collapse; }
-.meta-pane table { min-width: 100%; }
-.timeline-pane table { min-width: 600px; }
-/* Hide the meta-pane's own vertical scrollbar visually but keep it scrollable & synced */
-.meta-pane::-webkit-scrollbar { width: 0px; }
-.meta-pane { scrollbar-width: none; }
 table { width: 100%; border-collapse: collapse; min-width: 1000px; }
 thead th {
   font-family: var(--mono);
@@ -607,7 +602,7 @@ td {
 /* ══════════════════════════════════════════════════════════════════════
    EXECUTIVE HEALTH DASHBOARD
    ══════════════════════════════════════════════════════════════════════ */
-#dashboard-wrap { display: none; padding: 20px 28px 40px; }
+#dashboard-wrap { display: none; padding: 20px 28px 40px; flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .dash-grid {
   display: grid;
   gap: 14px;
@@ -798,6 +793,8 @@ td {
 </head>
 <body>
 
+<div id="app-shell">
+<div id="app-header">
 <div class="header">
   <div class="header-left">
     <h1>PHASE 1 — RASIC GANTT TRACKER</h1>
@@ -857,12 +854,16 @@ td {
 </div>
 <div id="zoom-bar"></div>
 <div class="stats" id="stats"></div>
+</div><!-- /app-header -->
 
+<div id="app-content">
 <div id="loading"><div class="spinner"></div><span>loading from google sheets…</span></div>
 <div id="error-msg"></div>
 <div class="ms-tooltip" id="ms-tooltip"><div class="ms-tooltip-card" id="ms-tooltip-card"></div></div>
 <div class="table-wrap" id="table-wrap" style="display:none"></div>
 <div id="dashboard-wrap"></div>
+</div><!-- /app-content -->
+</div><!-- /app-shell -->
 
 <script>
 // ── CONFIG ────────────────────────────────────────────────────────────────────
