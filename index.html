@@ -62,7 +62,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22px 28px 18px;
+  padding: 14px 28px 12px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 14px;
@@ -134,29 +134,63 @@ select {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 select:hover, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(129,140,248,0.12); }
+select option {
+  background: #161a28;
+  color: var(--text);
+}
 .legend {
   display: flex;
   gap: 16px;
-  padding: 10px 28px;
+  padding: 8px 28px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  max-height: 100px;
+  overflow: hidden;
+  transition: max-height 0.25s ease, padding 0.25s ease, opacity 0.2s ease, border-color 0.25s ease;
+  opacity: 1;
 }
 .leg { display: flex; align-items: center; gap: 5px; font-size: 11px; font-family: var(--mono); color: var(--text2); }
 .leg-bar { width: 20px; height: 8px; border-radius: 4px; }
 .stats {
   display: flex;
-  padding: 12px 28px;
+  padding: 10px 28px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
   gap: 12px;
+  max-height: 100px;
+  overflow: hidden;
+  transition: max-height 0.25s ease, padding 0.25s ease, opacity 0.2s ease, border-color 0.25s ease;
+  opacity: 1;
 }
+#app-header.compact .legend,
+#app-header.compact .stats {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  border-bottom-color: transparent;
+}
+.compact-toggle-btn {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  text-align: center;
+  padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  transition: color 0.15s, background 0.15s;
+}
+.compact-toggle-btn:hover { color: var(--accent); background: rgba(129,140,248,0.05); }
 .stat {
   background: var(--surface);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 9px 18px;
+  padding: 7px 16px;
   min-width: 100px;
   transition: border-color 0.2s, transform 0.2s;
 }
@@ -789,6 +823,68 @@ td {
 .slippage-card { display: flex; align-items: center; gap: 24px; height: 100%; }
 .slippage-num { font-family: var(--mono); font-size: 48px; font-weight: 500; color: var(--rag-amber); line-height: 1; }
 .slippage-sub { font-size: 11px; color: var(--text2); line-height: 1.6; }
+
+/* Report toolbar */
+.report-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  background: var(--surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+}
+.report-toolbar-left { flex: 1; min-width: 240px; }
+.report-toolbar-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin-bottom: 8px;
+}
+.report-note {
+  width: 100%;
+  min-height: 54px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  padding: 8px 10px;
+  resize: vertical;
+  outline: none;
+}
+.report-note:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(129,140,248,0.12); }
+.report-note::placeholder { color: var(--text3); }
+.report-toolbar-right { display: flex; gap: 8px; flex-shrink: 0; align-items: flex-start; }
+.report-btn {
+  background: linear-gradient(120deg, var(--accent2), var(--accent));
+  border: 1px solid var(--accent);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 0 16px rgba(129,140,248,0.25);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.report-btn:hover { transform: translateY(-1px); box-shadow: 0 0 22px rgba(129,140,248,0.4); }
+.report-btn.secondary {
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  box-shadow: none;
+}
+.report-btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -854,6 +950,7 @@ td {
 </div>
 <div id="zoom-bar"></div>
 <div class="stats" id="stats"></div>
+<div class="compact-toggle-btn" id="compactToggle" onclick="toggleCompactHeader()">▾ hide legend &amp; stats</div>
 </div><!-- /app-header -->
 
 <div id="app-content">
@@ -986,6 +1083,25 @@ function syncViewToggle() {
   btn.title = isExecution ? 'show current planning gantt view' : 'show execution tracking view';
   btn.classList.toggle('active-view', isExecution);
 }
+
+// ── COMPACT HEADER TOGGLE ─────────────────────────────────────────────────
+function toggleCompactHeader() {
+  const header = document.getElementById('app-header');
+  const btn = document.getElementById('compactToggle');
+  const isCompact = header.classList.toggle('compact');
+  btn.innerHTML = isCompact ? '▸ show legend &amp; stats' : '▾ hide legend &amp; stats';
+}
+// Default to compact mode on smaller laptop-height screens to maximize Gantt space.
+(function initCompactHeader() {
+  if (window.innerHeight <= 800) {
+    const header = document.getElementById('app-header');
+    const btn = document.getElementById('compactToggle');
+    if (header && btn) {
+      header.classList.add('compact');
+      btn.innerHTML = '▸ show legend &amp; stats';
+    }
+  }
+})();
 
 function toggleViewMode() {
   viewMode = viewMode === 'planning' ? 'execution' : 'planning';
@@ -1665,34 +1781,44 @@ function toggleFunc(funcName, tdEl) {
 }
 
 // ── RAG LOGIC — single unified source of truth ────────────────────────────
-// Overdue (red): structural deadline date < today AND status text does not
-//   equal/include 'done' or 'complete'. Hard dates override text status.
-// At Risk (amber): not completed AND structural start date <= today + 3 days.
-function unifiedRagCheck(statusText, endDate, startDate) {
+// Both views derive their dates from the SAME origin: the planning sheet's
+// start/end. Execution view overrides the end date with revisedEndDate or
+// plannedEndDate when available, but falls back to the same planning `end`
+// so the two views never disagree when no master data exists.
+//
+// Overdue (red): deadline date < today AND status text does not equal/include
+//   'done' or 'complete'. Hard dates override text status.
+// At Risk (amber): not completed, not overdue, AND 70% or more of the
+//   scheduled duration (start -> end) has elapsed — i.e. 30% or less of the
+//   time budget remains.
+function unifiedRagCheck(statusText, startDate, endDate) {
   const today = new Date(); today.setHours(0,0,0,0);
   const status = (statusText || '').toLowerCase().trim();
   const isDone = status === 'done' || status.includes('complete');
 
   if (isDone) return 'green';
-  if (status === 'in_progress' || status.includes('progress')) {
-    // still check hard-date overdue override below for in-progress tasks
-    if (endDate && endDate < today) return 'red';
-    return 'blue';
-  }
+
+  // Hard date overdue check overrides everything except "done/complete".
   if (endDate && endDate < today) return 'red';
 
-  const today3 = new Date(today); today3.setDate(today3.getDate() + 3);
-  if (startDate && startDate <= today3) return 'amber';
+  // At risk: 70% of the start->end window has elapsed (30% or less remains).
+  if (startDate && endDate && endDate > startDate) {
+    const totalMs   = endDate - startDate;
+    const elapsedMs = today - startDate;
+    const pctElapsed = elapsedMs / totalMs;
+    if (pctElapsed >= 0.7) return 'amber';
+  }
+
+  if (status === 'in_progress' || status.includes('progress')) return 'blue';
   if (!endDate) return 'grey';
   return 'grey';
 }
 
 function ragStatus(t) {
-  const parseLocal = s => { if(!s) return null; const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
-  const endDate   = parseLocal(t.end);
-  const startDate = parseLocal(t.start);
+  const startDate = parseLocalDate(t.start);
+  const endDate   = parseLocalDate(t.end);
   if (!endDate) return 'grey';
-  return unifiedRagCheck(t.status, endDate, startDate);
+  return unifiedRagCheck(t.status, startDate, endDate);
 }
 
 function ragColor(rag) {
@@ -1807,11 +1933,12 @@ function parseLocalDate(s) {
 }
 
 function executionRagStatus(t) {
-  // Structural deadline: revisedEndDate, falling back to plannedEndDate.
-  const endDate = parseLocalDate(t.revisedEndDate || t.plannedEndDate);
-  const startDate = parseLocalDate(t.startDate || t.planningStart || t.start);
+  // Same origin as planning view: fall back to the planning sheet's
+  // start/end when no master-sheet override exists, so both views agree.
+  const startDate = parseLocalDate(t.startDate || t.start);
+  const endDate   = parseLocalDate(t.revisedEndDate || t.plannedEndDate || t.end);
   const statusText = t.executionStatus || '';
-  return unifiedRagCheck(statusText, endDate, startDate);
+  return unifiedRagCheck(statusText, startDate, endDate);
 }
 
 function renderExecutionTable() {
@@ -1832,9 +1959,9 @@ function renderExecutionTable() {
     if (selPriority && t.priority !== selPriority) return false;
     return true;
   }).map(t => {
-    const execStart = t.startDate || t.planningStart || t.start;
-    const plannedEnd = t.plannedEndDate || t.revisedEndDate || t.planningEnd || t.end;
-    const execEnd = t.revisedEndDate || t.plannedEndDate || t.actualEndDate || t.planningEnd || t.end;
+    const execStart = t.startDate || t.start;
+    const plannedEnd = t.plannedEndDate || t.revisedEndDate || t.end;
+    const execEnd = t.revisedEndDate || t.plannedEndDate || t.end;
     return { ...t, _execStart: execStart, _plannedEnd: plannedEnd, _execEnd: execEnd, _rag: executionRagStatus(t) };
   });
 
@@ -2717,7 +2844,35 @@ function renderDashboard() {
   const ringCirc = 2 * Math.PI * ringRadius;
   const ringOffset = ringCirc * (1 - completionPct/100);
 
+  // Active filter context chips
+  const ownerLabel = isExec ? 'Responsible' : 'Owner';
+  const chips = [];
+  if (selFunc) chips.push(`Function: ${selFunc}`);
+  if (selPhase) chips.push(`Phase: ${selPhase}`);
+  if (activeOwner) chips.push(`${ownerLabel}: ${activeOwner}`);
+  if (isExec && selAccountable) chips.push(`Accountable: ${selAccountable}`);
+  if (isExec && selStatus) chips.push(`Status: ${selStatus}`);
+  if (isExec && selPriority) chips.push(`Priority: ${selPriority}`);
+  const contextHTML = chips.length
+    ? `<span style="color:var(--text3)">Active Filters:</span> ${chips.map(c => `<span class="owner-pill" style="cursor:default">${escapeHTML(c)}</span>`).join(' ')}`
+    : `<span style="color:var(--text3)">Showing Global Project Metrics (Unfiltered)</span>`;
+
+  const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+  const savedNote = window.__dashboardReportNote || '';
+
   const html = `
+    <div class="report-toolbar">
+      <div class="report-toolbar-left">
+        <div class="report-toolbar-title">Health Report · ${isExec ? 'Execution View' : 'Planning View'} · ${reportDateStr}</div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:8px;font-family:var(--mono)">${contextHTML}</div>
+        <textarea id="reportNote" class="report-note" placeholder="Add executive notes or commentary to include in the downloadable report (optional)…">${escapeHTML(savedNote)}</textarea>
+      </div>
+      <div class="report-toolbar-right">
+        <button class="report-btn secondary" onclick="previewDashboardReport()">👁 preview report</button>
+        <button class="report-btn" onclick="downloadDashboardReport()">⬇ download report</button>
+      </div>
+    </div>
+    <div id="report-body">
     <div class="dash-grid dash-row-a">
       <div class="dash-card">
         <div class="dash-card-title">Overall Completion</div>
@@ -2818,11 +2973,92 @@ function renderDashboard() {
         </div>
       </div>
     </div>
+    </div><!-- /report-body -->
   `;
 
   const dashWrap = document.getElementById('dashboard-wrap');
   if (dashWrap) dashWrap.innerHTML = html;
   document.getElementById('loading').style.display = 'none';
+
+  const noteEl = document.getElementById('reportNote');
+  if (noteEl) {
+    noteEl.addEventListener('input', () => { window.__dashboardReportNote = noteEl.value; });
+  }
+}
+
+// ── REPORT PREVIEW / DOWNLOAD ────────────────────────────────────────────
+function buildReportDocument() {
+  const reportBody = document.getElementById('report-body');
+  if (!reportBody) return null;
+
+  const isExec = viewMode === 'execution';
+  const today = new Date();
+  const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+  const note = (window.__dashboardReportNote || '').trim();
+
+  // Clone the report body and strip the interactive note widget — replace
+  // it with a static rendering of the note text in the printable doc.
+  const clone = reportBody.cloneNode(true);
+
+  // Collect all stylesheet rules from the page so the report keeps the
+  // premium dark workspace styling.
+  let styles = '';
+  for (const sheet of document.styleSheets) {
+    try {
+      for (const rule of sheet.cssRules) styles += rule.cssText + '\n';
+    } catch (e) { /* cross-origin sheets ignored */ }
+  }
+
+  const noteBlockHTML = note
+    ? `<div class="dash-card" style="margin-bottom:14px"><div class="dash-card-title">Executive Notes</div><div style="font-size:12px;line-height:1.6;color:var(--text);white-space:pre-wrap">${escapeHTML(note)}</div></div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Health Report — ${reportDateStr}</title>
+<style>${styles}
+body { padding: 28px; background: var(--bg); }
+.report-print-header { margin-bottom: 18px; }
+.report-print-title { font-family: var(--mono); font-size: 16px; color: var(--text); margin-bottom: 4px; }
+.report-print-sub { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+@media print {
+  body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+</head><body>
+<div class="report-print-header">
+  <div class="report-print-title">PHASE 1 — RASIC GANTT TRACKER · ${isExec ? 'Execution' : 'Planning'} Health Report</div>
+  <div class="report-print-sub">Generated ${reportDateStr}</div>
+</div>
+${noteBlockHTML}
+${clone.outerHTML}
+</body></html>`;
+}
+
+function previewDashboardReport() {
+  const doc = buildReportDocument();
+  if (!doc) return;
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow popups to preview the report.'); return; }
+  win.document.open();
+  win.document.write(doc);
+  win.document.close();
+}
+
+function downloadDashboardReport() {
+  const doc = buildReportDocument();
+  if (!doc) return;
+  // Open in a new tab and trigger the browser print dialog so the user can
+  // "Save as PDF" — this preserves the styled layout for a polished
+  // shareable report.
+  const win = window.open('', '_blank');
+  if (!win) { alert('Please allow popups to download the report.'); return; }
+  win.document.open();
+  win.document.write(doc);
+  win.document.close();
+  win.onload = () => { setTimeout(() => win.print(), 300); };
+  // Fallback in case onload doesn't fire (already-loaded blank doc)
+  setTimeout(() => { try { win.print(); } catch(e){} }, 600);
 }
 
 
