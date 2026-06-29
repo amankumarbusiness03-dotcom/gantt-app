@@ -1017,6 +1017,61 @@ td {
 /* Clickable task rows */
 tr.task-row { cursor: pointer; }
 tr.task-row:hover td { background: rgba(99,102,241,0.07); }
+
+/* ── Multi-level grouping hierarchy ────────────────────────────────── */
+/* Intermediate group (Part-level) section row */
+tr.section-group-part td {
+  background: rgba(99,102,241,0.10);
+  border-left: 3px solid var(--accent);
+  border-top: 1px solid rgba(99,102,241,0.28);
+  padding: 10px 16px 8px !important;
+}
+tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
+  /* subtle indent for first child after a part header */
+}
+.group-part-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.group-part-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.group-part-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+  padding-left: 22px;
+}
+.part-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--text2);
+}
+.part-meta-key { color: var(--text3); }
+.part-meta-green { border-color: rgba(52,211,153,0.35); color: var(--rag-green); }
+.part-meta-green .part-meta-key { color: rgba(52,211,153,0.6); }
+.part-meta-amber { border-color: rgba(251,191,36,0.35); color: var(--rag-amber); }
+.part-meta-amber .part-meta-key { color: rgba(251,191,36,0.6); }
+.part-meta-red   { border-color: rgba(247,95,95,0.35); color: var(--rag-red); }
+.part-meta-red .part-meta-key   { color: rgba(247,95,95,0.6); }
+/* Sub-function rows inside a part get left-indented */
+tr.section-row.section-sublevel td {
+  padding-left: 32px !important;
+}
 </style>
 </head>
 <body>
@@ -1119,25 +1174,22 @@ tr.task-row:hover td { background: rgba(99,102,241,0.07); }
 const PROJECTS = {
   array: {
     name: 'Array',
+    grouping: ['function'],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv',
     master:     'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851',
     milestones: 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=249722363',
   },
 
-  // ── Add future projects below. Copy this block and fill in URLs. ──────────
   pvh: {
     name: 'PVH',
-    planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',   // ← paste your PVH Planning sheet CSV URL here
-    master:     '',   // ← paste your PVH Master sheet CSV URL here (or leave empty)
-    milestones: '',   // ← paste your PVH Milestones sheet CSV URL here (or leave empty)
+    // 'partName' fuzzy-matches _extra['Part Name']; 'function' maps to t.func
+    grouping: ['partName', 'function'],
+    planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pubhtml',
+    master:     '',
+    milestones: '',
   },
 
-  // customer3: {
-  //   name: 'Customer 3',
-  //   planning:   '',
-  //   master:     '',
-  //   milestones: '',
-  // },
+  // customer3: { name:'Customer 3', grouping:['function'], planning:'', master:'', milestones:'' },
 };
 
 // ── Active project state ──────────────────────────────────────────────────
@@ -1994,7 +2046,7 @@ function switchProject(projectId) {
   viewMode = 'planning';
   dashboardActive = false;
   activeOwner = '';
-  collapsedFuncs.clear();
+  collapsedGroups.clear();
   taskMilestones.clear();
   zoomMode = 'overview';
   zoomMonth = null;
@@ -2054,32 +2106,86 @@ function renderMilestoneList() {
   `).join('');
 }
 
-// ── ACCORDION STATE — toggle without re-render ────────────────────────────────
-const collapsedFuncs = new Set();
+// ── CONFIGURABLE GROUPING HIERARCHY ENGINE ──────────────────────────────────
+// collapsedGroups stores the path of any group node that is collapsed.
+// For Array (single-level), paths are just function names — same as the old
+// collapsedFuncs keys, so behaviour is unchanged.
+// For PVH (two-level), part paths are e.g. "DAMPER", function paths are
+// e.g. "DAMPER||Procurement" (pipe separator — safe in any CSV data).
+const collapsedGroups = new Set();
 
-function toggleFunc(funcName, tdEl) {
-  const rowEl = tdEl.parentElement; // <tr>
-  if (collapsedFuncs.has(funcName)) {
-    collapsedFuncs.delete(funcName);
-    rowEl.classList.remove('collapsed');
-    const toggle = rowEl.querySelector('.section-toggle');
-    if (toggle) toggle.textContent = '▼';
-    let sib = rowEl.nextElementSibling;
-    while (sib && !sib.classList.contains('section-row') && !sib.classList.contains('milestone-bar-row')) {
-      sib.style.display = '';
-      sib = sib.nextElementSibling;
-    }
+// Toggle a group path. Full re-render (not DOM walk) — required for multi-level
+// nesting because hiding a parent must also hide all descendant rows.
+function toggleGroup(groupPath) {
+  if (collapsedGroups.has(groupPath)) {
+    collapsedGroups.delete(groupPath);
   } else {
-    collapsedFuncs.add(funcName);
-    rowEl.classList.add('collapsed');
-    const toggle = rowEl.querySelector('.section-toggle');
-    if (toggle) toggle.textContent = '▶';
-    let sib = rowEl.nextElementSibling;
-    while (sib && !sib.classList.contains('section-row') && !sib.classList.contains('milestone-bar-row')) {
-      sib.style.display = 'none';
-      sib = sib.nextElementSibling;
-    }
+    collapsedGroups.add(groupPath);
   }
+  renderAll();
+}
+
+// ── Resolves a grouping key to a value on a task object ──────────────────────
+// Built-in: 'function' | 'phase' | 'owner' | 'responsible'
+// Anything else: fuzzy-matched against t._extra keys.
+function resolveGroupValue(task, key) {
+  const norm = s => (s || '').toLowerCase().replace(/[\s_\-\/]+/g, '');
+  const nk = norm(key);
+  if (nk === 'function' || nk === 'func') return task.func || '';
+  if (nk === 'phase') return task.phase || '';
+  if (nk === 'owner') return task.owner || task.responsible || '';
+  if (nk === 'responsible') return task.responsible || task.owner || '';
+  if (task._extra) {
+    const keys = Object.keys(task._extra);
+    const match = keys.find(k => norm(k) === nk)
+                || keys.find(k => norm(k).includes(nk) || nk.includes(norm(k)));
+    if (match) return task._extra[match];
+  }
+  return '';
+}
+
+// ── Builds a recursive grouping tree from a flat task list ───────────────────
+// Returns:
+//   Array of group-nodes (when depth < groupingKeys.length), each:
+//   { depth, key, name, path, tasks (all tasks), children (sub-nodes or task[]) }
+//   OR a plain task[] when depth === groupingKeys.length (leaf).
+function buildGroupTree(tasks, groupingKeys, depth, parentPath) {
+  depth = depth || 0;
+  parentPath = parentPath === undefined ? '' : parentPath;
+  if (depth >= groupingKeys.length) return tasks; // leaf level
+
+  const key = groupingKeys[depth];
+  const order = [];
+  const groups = new Map();
+  tasks.forEach(t => {
+    const val = resolveGroupValue(t, key) || '(Unassigned)';
+    if (!groups.has(val)) { groups.set(val, []); order.push(val); }
+    groups.get(val).push(t);
+  });
+
+  return order.map(groupName => {
+    const groupTasks = groups.get(groupName);
+    const path = parentPath ? parentPath + '||' + groupName : groupName;
+    return {
+      depth, key, name: groupName, path,
+      tasks: groupTasks,
+      children: buildGroupTree(groupTasks, groupingKeys, depth + 1, path),
+    };
+  });
+}
+
+// ── Returns _extra fields that are constant across every task in a group ──────
+// Used for the part-level header metadata chips (Supply Model, etc.).
+// excludeNormKeys: Set of already-used grouping keys (normalised) to skip.
+function getGroupConstantMeta(tasks, excludeNormKeys) {
+  if (!tasks || !tasks.length || !tasks[0]._extra) return {};
+  const norm = s => (s || '').toLowerCase().replace(/[\s_\-\/]+/g, '');
+  const result = {};
+  Object.entries(tasks[0]._extra).forEach(([k, v]) => {
+    if (excludeNormKeys && excludeNormKeys.has(norm(k))) return;
+    if (tasks.every(t => t._extra && t._extra[k] === v)) result[k] = v;
+  });
+  return result;
 }
 
 // ── RAG LOGIC — single unified source of truth ────────────────────────────
@@ -2440,7 +2546,12 @@ function renderExecutionTable() {
   // Store for drawer access
   _lastRenderedTasks = tasks;
 
-  const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
+  // ── Build grouping tree (configurable hierarchy) ─────────────────────────
+  const grouping = proj().grouping || ['function'];
+  const tree = buildGroupTree(tasks, grouping);
+  const totalExecCols = 10 + execExtraCount;
+  const excludedExecKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
+
   let html = `<table style="min-width:1450px">
   <thead>
     <tr>
@@ -2467,108 +2578,143 @@ function renderExecutionTable() {
     return { left, width: Math.max(minWidth, right - left), endPct: right };
   };
 
-  funcs.forEach(f => {
-    const ft = tasks.filter(t => t.func === f);
-    if (!ft.length) return;
-    const isCollapsed = collapsedFuncs.has(f);
-    const grpRed   = ft.filter(t=>t._rag==='red').length;
-    const grpAmber = ft.filter(t=>t._rag==='amber').length;
-    const ragSummary = grpRed
-      ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">^ ${grpRed} overdue</span>`
-      : grpAmber
-      ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">* ${grpAmber} at risk</span>`
-      : '';
+  // ── Recursive group row builder (closure captures all local context) ───────
+  function buildExecGroupRows(nodes, isParentHidden) {
+    let out = '';
+    nodes.forEach(node => {
+      const isLeafGroup = !Array.isArray(node.children);
+      const isCollapsed = collapsedGroups.has(node.path);
+      const childrenHidden = isParentHidden || isCollapsed;
 
-    html += `<tr class="section-row${isCollapsed?' collapsed':''}">
-      <td colspan="${10 + execExtraCount}" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
-        <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
-        <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
-        ${escapeHTML(f)}
-        ${ragSummary}
-      </td>
-    </tr>`;
+      const rc = { red:0, amber:0, green:0 };
+      node.tasks.forEach(t => { if (t._rag) rc[t._rag] = (rc[t._rag] || 0) + 1; });
 
-    ft.forEach(t => {
-      const sDate = parseLocalDate(t._execStart);
-      const eDate = parseLocalDate(t._execEnd);
-      if (!sDate || !eDate) return;
+      if (!isLeafGroup) {
+        // ── Intermediate section row (Part level) ─────────────────────────
+        const constMeta = getGroupConstantMeta(node.tasks, excludedExecKeys);
+        const metaEntries = Object.entries(constMeta).slice(0, 4);
+        const metaChipsHTML = [
+          ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
+          `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
+          rc.green ? `<span class="part-meta-chip part-meta-green"><span class="part-meta-key">Done:</span> ${rc.green}</span>` : '',
+          rc.amber ? `<span class="part-meta-chip part-meta-amber"><span class="part-meta-key">At Risk:</span> ${rc.amber}</span>` : '',
+          rc.red   ? `<span class="part-meta-chip part-meta-red"><span class="part-meta-key">Overdue:</span> ${rc.red}</span>` : '',
+        ].filter(Boolean).join('');
 
-      const plannedRaw = parseLocalDate(t._plannedEnd) || eDate;
-      const plannedDisplayEnd = plannedRaw > eDate ? eDate : plannedRaw;
-      const totalSeg = segmentMetrics(sDate, eDate);
-      const plannedSeg = segmentMetrics(sDate, plannedDisplayEnd);
-      const extensionSeg = plannedRaw < eDate ? segmentMetrics(plannedRaw, eDate) : null;
-      if (!totalSeg || !plannedSeg) return;
+        out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${totalExecCols}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
+            <div class="group-part-header">
+              <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+              <span class="group-part-name">${escapeHTML(node.name)}</span>
+            </div>
+            <div class="group-part-meta">${metaChipsHTML}</div>
+          </td>
+        </tr>`;
+        out += buildExecGroupRows(node.children, childrenHidden);
 
-      const rag = t._rag;
-      const color = ragColor(rag);
-      const rClass = ragClass(rag);
-      const progress = Number(t.progressPct);
-      const progressPct = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
-      const progressHTML = progressPct > 0
-        ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
-        : '';
+      } else {
+        // ── Leaf section row (Function level) ─────────────────────────────
+        const ragSummary = rc.red
+          ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${rc.red} overdue</span>`
+          : rc.amber
+          ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">● ${rc.amber} at risk</span>`
+          : '';
+        const sublevelClass = node.depth > 0 ? ' section-sublevel' : '';
 
-      const gridLines = majorTicks.map(tk =>
-        `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
-      ).join('');
-      const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
-        `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
-      ).join('');
-      const todayLine = (todayPct>=0 && todayPct<=100)
-        ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
-        : '';
+        out += `<tr class="section-row${sublevelClass}${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${totalExecCols}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer${node.depth > 0 ? ';padding-left:32px' : ''}">
+            <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+            <span style="margin-right:8px;color:var(--text3);font-size:10px">${node.tasks.length}</span>
+            ${escapeHTML(node.name)}
+            ${ragSummary}
+          </td>
+        </tr>`;
 
-      const ragLabel = {red:'Overdue',amber:'Due Within 3 Days',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
-      const statusText = t.executionStatus || ragLabel;
-      const tip = `${t.activity} | ${fmt(t._execStart)} -> ${fmt(t._execEnd)}${t.responsible?' | '+t.responsible:''}`;
-      const responsibleActive = t.responsible && t.responsible === activeOwner ? ' active-owner' : '';
-      const msKey = `${t.func}::${t.activity}`;
-      const isTaskMs = taskMilestones.has(msKey);
-      const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
-      const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
-        data-ms-type="diamond"
-        data-ms-label="${escapeHTML(t.activity)}"
-        data-ms-date="${t._execEnd}"
-        data-ms-owner="${escapeHTML(t.responsible || '-')}"
-        data-ms-start="${t._execStart}"
-        data-ms-rag="${rag}"
-        data-ms-rag-label="${ragLabel}"></div>`;
+        node.children.forEach(t => {
+          const sDate = parseLocalDate(t._execStart);
+          const eDate = parseLocalDate(t._execEnd);
+          if (!sDate || !eDate) return;
 
-      // Extra field cells (execution view)
-      const execExtraCells = execExtraNames.map(n =>
-        `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
-      ).join('');
+          const plannedRaw = parseLocalDate(t._plannedEnd) || eDate;
+          const plannedDisplayEnd = plannedRaw > eDate ? eDate : plannedRaw;
+          const totalSeg = segmentMetrics(sDate, eDate);
+          const plannedSeg = segmentMetrics(sDate, plannedDisplayEnd);
+          const extensionSeg = plannedRaw < eDate ? segmentMetrics(plannedRaw, eDate) : null;
+          if (!totalSeg || !plannedSeg) return;
 
-      const execTaskIdx = _lastRenderedTasks.indexOf(t);
-      html += `<tr class="task-row"${isCollapsed?' style="display:none"':''} data-action="show-detail" data-task-idx="${execTaskIdx}">
-        <td class="activity-cell">
-          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
-        <td>${t.responsible
-          ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
-          : '<span style="color:var(--text3)">-</span>'}</td>
-        <td>${dash(t.accountable)}</td>
-        <td class="date-cell">${dash(fmt(t._execStart))}</td>
-        <td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>
-        <td class="date-cell">${dash(t.leadTimeRequested)}</td>
-        <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
-        <td class="date-cell">${dash(t.aging)}</td>
-        <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
-        ${execExtraCells}
-        <td class="bar-col">
-          <div class="bar-outer">
-            ${gridLines}
-            ${mLines}
-            <div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
-            ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
-            ${progressHTML}
-            ${todayLine}
-            ${taskDiamond}
-          </div>
-        </td>
-      </tr>`;
+          const rag = t._rag;
+          const color = ragColor(rag);
+          const rClass = ragClass(rag);
+          const progress = Number(t.progressPct);
+          const progressPct = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
+          const progressHTML = progressPct > 0
+            ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
+            : '';
+
+          const gridLines = majorTicks.map(tk =>
+            `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+          ).join('');
+          const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
+            `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
+          ).join('');
+          const todayLine = (todayPct>=0 && todayPct<=100)
+            ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+            : '';
+
+          const ragLabel = {red:'Overdue',amber:'At Risk',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
+          const statusText = t.executionStatus || ragLabel;
+          const tip = `${t.activity} | ${fmt(t._execStart)} -> ${fmt(t._execEnd)}${t.responsible?' | '+t.responsible:''}`;
+          const responsibleActive = t.responsible && t.responsible === activeOwner ? ' active-owner' : '';
+          const msKey = `${t.func}::${t.activity}`;
+          const isTaskMs = taskMilestones.has(msKey);
+          const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
+          const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+            data-ms-type="diamond"
+            data-ms-label="${escapeHTML(t.activity)}"
+            data-ms-date="${t._execEnd}"
+            data-ms-owner="${escapeHTML(t.responsible || '-')}"
+            data-ms-start="${t._execStart}"
+            data-ms-rag="${rag}"
+            data-ms-rag-label="${ragLabel}"></div>`;
+
+          const execExtraCells = execExtraNames.map(n =>
+            `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
+          ).join('');
+
+          const execTaskIdx = _lastRenderedTasks.indexOf(t);
+          out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${execTaskIdx}">
+            <td class="activity-cell">
+              <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
+            <td>${t.responsible
+              ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
+              : '<span style="color:var(--text3)">-</span>'}</td>
+            <td>${dash(t.accountable)}</td>
+            <td class="date-cell">${dash(fmt(t._execStart))}</td>
+            <td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>
+            <td class="date-cell">${dash(t.leadTimeRequested)}</td>
+            <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
+            <td class="date-cell">${dash(t.aging)}</td>
+            <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
+            ${execExtraCells}
+            <td class="bar-col">
+              <div class="bar-outer">
+                ${gridLines}
+                ${mLines}
+                <div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
+                ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
+                ${progressHTML}
+                ${todayLine}
+                ${taskDiamond}
+              </div>
+            </td>
+          </tr>`;
+        });
+      }
     });
-  });
+    return out;
+  }
+
+  html += buildExecGroupRows(tree, false);
 
   html += `</tbody></table>`;
 
@@ -2755,9 +2901,7 @@ function renderTable() {
   // Old milestone banner row removed — flag pins in <th> replace it
   const milestoneBarHTML = '';
 
-  // ── Extra field columns ────────────────────────────────────────────────────
-  // Collect all extra-field names present across the filtered task set, in
-  // first-seen order. These are appended after the standard metadata columns.
+  // ── Extra field names and grouping tree ─────────────────────────────────
   const extraFieldNames = [];
   const extraFieldSet = new Set();
   tasks.forEach(t => {
@@ -2766,11 +2910,13 @@ function renderTable() {
     });
   });
   const extraColCount = extraFieldNames.length;
-
-  // Store for drawer access
   _lastRenderedTasks = tasks;
 
-  const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
+  const grouping = proj().grouping || ['function'];
+  const tree = buildGroupTree(tasks, grouping);
+  const totalPlanCols = 6 + extraColCount;
+  const excludedPlanKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
+
   let html = `<table>
   <thead>
     <tr>
@@ -2785,105 +2931,129 @@ function renderTable() {
   </thead><tbody>
   ${milestoneBarHTML}`;
 
-  funcs.forEach(f => {
-    const ft = tasks.filter(t => t.func === f);
-    if (!ft.length) return;
-    const isCollapsed = collapsedFuncs.has(f);
+  // ── Recursive group row builder (closure captures all local context) ───────
+  function buildPlanGroupRows(nodes, isParentHidden) {
+    let out = '';
+    nodes.forEach(node => {
+      const isLeafGroup = !Array.isArray(node.children);
+      const isCollapsed = collapsedGroups.has(node.path);
+      const childrenHidden = isParentHidden || isCollapsed;
 
-    // Section RAG summary — use pre-computed _rag
-    const grpRed   = ft.filter(t=>t._rag==='red').length;
-    const grpAmber = ft.filter(t=>t._rag==='amber').length;
-    const ragSummary = grpRed
-      ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${grpRed} overdue</span>`
-      : grpAmber
-      ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">● ${grpAmber} at risk</span>`
-      : '';
+      const rc = { red:0, amber:0, green:0 };
+      node.tasks.forEach(t => { if (t._rag) rc[t._rag] = (rc[t._rag] || 0) + 1; });
 
-    // Section row — data-action attribute, handled by delegated listener
-    html += `<tr class="section-row${isCollapsed?' collapsed':''}">
-      <td colspan="${6 + extraColCount}" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
-        <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
-        <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
-        ${escapeHTML(f)}
-        ${ragSummary}
-      </td>
-    </tr>`;
+      if (!isLeafGroup) {
+        // ── Intermediate section row (Part level) ─────────────────────────
+        const constMeta = getGroupConstantMeta(node.tasks, excludedPlanKeys);
+        const metaEntries = Object.entries(constMeta).slice(0, 4);
+        const metaChipsHTML = [
+          ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
+          `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
+          rc.green ? `<span class="part-meta-chip part-meta-green"><span class="part-meta-key">Done:</span> ${rc.green}</span>` : '',
+          rc.amber ? `<span class="part-meta-chip part-meta-amber"><span class="part-meta-key">At Risk:</span> ${rc.amber}</span>` : '',
+          rc.red   ? `<span class="part-meta-chip part-meta-red"><span class="part-meta-key">Overdue:</span> ${rc.red}</span>` : '',
+        ].filter(Boolean).join('');
 
-    ft.forEach(t => {
-      const sDate = parseLocal(t.start);
-      const eDate = parseLocal(t.end);
-      if (!sDate || !eDate) return;
-      const clampedStart = sDate < minD ? minD : sDate;
-      const clampedEnd   = eDate > maxD ? maxD : eDate;
-      const left  = pctOf(clampedStart);
-      const right = pctOf(clampedEnd);
-      const w     = Math.max(0.6, right - left);
+        out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${totalPlanCols}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
+            <div class="group-part-header">
+              <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+              <span class="group-part-name">${escapeHTML(node.name)}</span>
+            </div>
+            <div class="group-part-meta">${metaChipsHTML}</div>
+          </td>
+        </tr>`;
+        out += buildPlanGroupRows(node.children, childrenHidden);
 
-      const rag    = t._rag;
-      const color  = ragColor(rag);
-      const rClass = ragClass(rag);
+      } else {
+        // ── Leaf section row (Function level) ─────────────────────────────
+        const ragSummary = rc.red
+          ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${rc.red} overdue</span>`
+          : rc.amber
+          ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">● ${rc.amber} at risk</span>`
+          : '';
+        const sublevelClass = node.depth > 0 ? ' section-sublevel' : '';
 
-      // Grid lines
-      const gridLines = majorTicks.map(tk =>
-        `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
-      ).join('');
+        out += `<tr class="section-row${sublevelClass}${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${totalPlanCols}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer${node.depth > 0 ? ';padding-left:32px' : ''}">
+            <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+            <span style="margin-right:8px;color:var(--text3);font-size:10px">${node.tasks.length}</span>
+            ${escapeHTML(node.name)}
+            ${ragSummary}
+          </td>
+        </tr>`;
 
-      // Milestone pole lines — solid thin gold, continuation of the flag’s pole
-      const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
-        `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
-      ).join('');
+        node.children.forEach(t => {
+          const sDate = parseLocal(t.start);
+          const eDate = parseLocal(t.end);
+          if (!sDate || !eDate) return;
+          const clampedStart = sDate < minD ? minD : sDate;
+          const clampedEnd   = eDate > maxD ? maxD : eDate;
+          const left  = pctOf(clampedStart);
+          const right = pctOf(clampedEnd);
+          const w     = Math.max(0.6, right - left);
 
-      // Today line
-      const todayLine = (todayPct>=0 && todayPct<=100)
-        ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
-        : '';
+          const rag    = t._rag;
+          const color  = ragColor(rag);
+          const rClass = ragClass(rag);
 
-      const tip = `${escapeHTML(t.activity)} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+escapeHTML(t.owner):''}`;
-      const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
+          const gridLines = majorTicks.map(tk =>
+            `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+          ).join('');
+          const mLines = visibleMilestones.filter(m => !m.func || normalizeTaskText(m.func) === normalizeTaskText(t.func)).map(m =>
+            `<div style="position:absolute;top:-3px;bottom:-3px;left:${m.p.toFixed(2)}%;width:0;border-left:1.5px solid rgba(255,220,100,0.38);z-index:8;pointer-events:none"></div>`
+          ).join('');
+          const todayLine = (todayPct>=0 && todayPct<=100)
+            ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+            : '';
 
-      // Task-linked milestone state
-      const msKey = `${t.func}::${t.activity}`;
-      const isTaskMs = taskMilestones.has(msKey);
-      // Diamond at end-date position inside bar-outer
-      const endPct = pctOf(clampedEnd);
-      const ragLabel = {red:'Overdue',amber:'At Risk',green:'Done',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
-      const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
-        data-ms-type="diamond"
-        data-ms-label="${t.activity.replace(/"/g,'&quot;')}"
-        data-ms-date="${t.end}"
-        data-ms-owner="${(t.owner||'—').replace(/"/g,'&quot;')}"
-        data-ms-start="${t.start}"
-        data-ms-rag="${rag}"
-        data-ms-rag-label="${ragLabel}"></div>`;
+          const tip = `${escapeHTML(t.activity)} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+escapeHTML(t.owner):''}`;
+          const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
+          const msKey = `${t.func}::${t.activity}`;
+          const isTaskMs = taskMilestones.has(msKey);
+          const endPct = pctOf(clampedEnd);
+          const ragLabel = {red:'Overdue',amber:'At Risk',green:'Done',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
+          const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+            data-ms-type="diamond"
+            data-ms-label="${t.activity.replace(/"/g,'&quot;')}"
+            data-ms-date="${t.end}"
+            data-ms-owner="${(t.owner||'—').replace(/"/g,'&quot;')}"
+            data-ms-start="${t.start}"
+            data-ms-rag="${rag}"
+            data-ms-rag-label="${ragLabel}"></div>`;
 
-      // Extra field cells
-      const extraCells = extraFieldNames.map(n =>
-        `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
-      ).join('');
+          const extraCells = extraFieldNames.map(n =>
+            `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
+          ).join('');
 
-      const taskIdx = _lastRenderedTasks.indexOf(t);
-      html += `<tr class="task-row"${isCollapsed?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
-        <td class="activity-cell">
-          <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
-        <td>${t.owner
-          ? `<span class="owner-pill${ownerActive}" data-action="filter-owner" data-owner="${escapeHTML(t.owner)}" title="click to filter by ${escapeHTML(t.owner)}">${escapeHTML(t.owner)}</span>`
-          : '<span style="color:var(--text3)">—</span>'}</td>
-        <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${escapeHTML(t.phase)}</span></td>
-        <td class="date-cell">${fmt(t.start)}</td>
-        <td class="date-cell">${fmt(t.end)}</td>
-        ${extraCells}
-        <td class="bar-col">
-          <div class="bar-outer">
-            ${gridLines}
-            ${mLines}
-            <div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>
-            ${todayLine}
-            ${taskDiamond}
-          </div>
-        </td>
-      </tr>`;
+          const taskIdx = _lastRenderedTasks.indexOf(t);
+          out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
+            <td class="activity-cell">
+              <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
+            <td>${t.owner
+              ? `<span class="owner-pill${ownerActive}" data-action="filter-owner" data-owner="${escapeHTML(t.owner)}" title="click to filter by ${escapeHTML(t.owner)}">${escapeHTML(t.owner)}</span>`
+              : '<span style="color:var(--text3)">—</span>'}</td>
+            <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${escapeHTML(t.phase)}</span></td>
+            <td class="date-cell">${fmt(t.start)}</td>
+            <td class="date-cell">${fmt(t.end)}</td>
+            ${extraCells}
+            <td class="bar-col">
+              <div class="bar-outer">
+                ${gridLines}
+                ${mLines}
+                <div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>
+                ${todayLine}
+                ${taskDiamond}
+              </div>
+            </td>
+          </tr>`;
+        });
+      }
     });
-  });
+    return out;
+  }
+
+  html += buildPlanGroupRows(tree, false);
 
   html += `</tbody></table>`;
 
@@ -3010,8 +3180,8 @@ document.body.addEventListener('click', function(e) {
     e.stopPropagation();
     filterByOwner(el.dataset.owner);
 
-  } else if (action === 'toggle-func') {
-    toggleFunc(el.dataset.func, el);
+  } else if (action === 'toggle-group') {
+    toggleGroup(el.dataset.groupPath);
 
   } else if (action === 'toggle-task-ms') {
     toggleTaskMilestone(el.dataset.key, el);
