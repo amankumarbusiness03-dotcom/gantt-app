@@ -1184,7 +1184,7 @@ const PROJECTS = {
     name: 'PVH',
     // 'partName' fuzzy-matches _extra['Part Name']; 'function' maps to t.func
     grouping: ['partName', 'function'],
-    planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pubhtml',
+    planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',
     master:     '',
     milestones: '',
   },
@@ -2166,8 +2166,13 @@ function buildGroupTree(tasks, groupingKeys, depth, parentPath) {
   return order.map(groupName => {
     const groupTasks = groups.get(groupName);
     const path = parentPath ? parentPath + '||' + groupName : groupName;
+    // isLeafGroup: true when children will be a plain task[] (not more group nodes).
+    // CANNOT use Array.isArray(children) to detect this — both task[] and group-node[]
+    // are arrays. Use depth arithmetic instead.
+    const isLeafGroup = (depth + 1) >= groupingKeys.length;
     return {
       depth, key, name: groupName, path,
+      isLeafGroup,
       tasks: groupTasks,
       children: buildGroupTree(groupTasks, groupingKeys, depth + 1, path),
     };
@@ -2582,7 +2587,7 @@ function renderExecutionTable() {
   function buildExecGroupRows(nodes, isParentHidden) {
     let out = '';
     nodes.forEach(node => {
-      const isLeafGroup = !Array.isArray(node.children);
+      const isLeafGroup = node.isLeafGroup; // set by buildGroupTree using depth arithmetic
       const isCollapsed = collapsedGroups.has(node.path);
       const childrenHidden = isParentHidden || isCollapsed;
 
@@ -2935,7 +2940,7 @@ function renderTable() {
   function buildPlanGroupRows(nodes, isParentHidden) {
     let out = '';
     nodes.forEach(node => {
-      const isLeafGroup = !Array.isArray(node.children);
+      const isLeafGroup = node.isLeafGroup; // set by buildGroupTree using depth arithmetic
       const isCollapsed = collapsedGroups.has(node.path);
       const childrenHidden = isParentHidden || isCollapsed;
 
