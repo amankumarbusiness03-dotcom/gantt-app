@@ -893,7 +893,7 @@ td {
 <div id="app-header">
 <div class="header">
   <div class="header-left">
-    <h1>PHASE 1 — RASIC GANTT TRACKER</h1>
+    <h1 id="project-title">PHASE 1 — RASIC GANTT TRACKER</h1>
     <p id="last-updated">connecting to sheet…</p>
   </div>
   <div class="header-right">
@@ -902,6 +902,8 @@ td {
       <span id="status-text">live</span>
     </div>
     <div class="filters">
+      <select id="projectSelector" title="Switch project" onchange="switchProject(this.value)"
+              style="border-color:var(--accent);font-weight:500;color:var(--accent)"></select>
       <select id="funcFilter"><option value="">all functions</option></select>
       <select id="phaseFilter">
         <option value="">all phases</option>
@@ -963,10 +965,54 @@ td {
 </div><!-- /app-shell -->
 
 <script>
-// ── CONFIG ────────────────────────────────────────────────────────────────────
-const SHEET_CSV_URL = window.SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv';
-const MASTER_SHEET_CSV_URL = window.MASTER_SHEET_CSV_URL || 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851';
-const MILESTONES_CSV_URL = window.MILESTONES_CSV_URL || 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=249722363';
+// ═══════════════════════════════════════════════════════════════════════════
+// MULTI-PROJECT CONFIGURATION
+// To add a new project: add one new entry here. No other code changes needed.
+// Keys used: name, planning (required), master (optional), milestones (optional)
+//
+// planning   → Planning Google Sheet CSV export URL
+// master     → Master Execution Tracker CSV export URL (or '' to skip)
+// milestones → Milestones Sheet CSV export URL (or '' to skip)
+// ═══════════════════════════════════════════════════════════════════════════
+const PROJECTS = {
+  array: {
+    name: 'Array',
+    planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv',
+    master:     'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851',
+    milestones: 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=249722363',
+  },
+
+  // ── Add future projects below. Copy this block and fill in URLs. ──────────
+  pvh: {
+    name: 'PVH',
+    planning:   '',   // ← paste your PVH Planning sheet CSV URL here
+    master:     '',   // ← paste your PVH Master sheet CSV URL here (or leave empty)
+    milestones: '',   // ← paste your PVH Milestones sheet CSV URL here (or leave empty)
+  },
+
+  // customer3: {
+  //   name: 'Customer 3',
+  //   planning:   '',
+  //   master:     '',
+  //   milestones: '',
+  // },
+};
+
+// ── Active project state ──────────────────────────────────────────────────
+// Reads the last-used project from localStorage so re-opening the app
+// automatically restores the user's previous context.
+const LS_KEY = 'rasic_active_project';
+let activeProjectId = (function() {
+  const saved = localStorage.getItem(LS_KEY);
+  // Only restore if the saved key still exists in PROJECTS.
+  return (saved && PROJECTS[saved]) ? saved : Object.keys(PROJECTS)[0];
+})();
+
+// Convenience getter — every URL reference in the app goes through this.
+function proj()         { return PROJECTS[activeProjectId]; }
+function SHEET_CSV_URL()      { return proj().planning   || ''; }
+function MASTER_SHEET_CSV_URL(){ return proj().master     || ''; }
+function MILESTONES_CSV_URL() { return proj().milestones || ''; }
 
 // ── DEMO DATA ─────────────────────────────────────────────────────────────────
 const DEMO_TASKS = [
@@ -1537,18 +1583,27 @@ function parseMasterCSV(text) {
   return rows.length ? rows : null;
 }
 
+// ── LOAD EPOCH GUARD ─────────────────────────────────────────────────────────
+// Incremented every time switchProject() or loadData() runs. Background async
+// loaders (master sheet, milestones) capture the epoch at the start of their
+// fetch and bail out silently if it has changed by the time the response lands.
+let _loadEpoch = 0;
+
 async function loadMasterSheetData() {
-  if (!MASTER_SHEET_CSV_URL || MASTER_SHEET_CSV_URL === 'YOUR_MASTER_SHEET_CSV_URL_HERE') {
+  const epoch = _loadEpoch;
+  const masterUrl = MASTER_SHEET_CSV_URL();
+  if (!masterUrl) {
     masterTasks = [];
     masterSheetLoadError = '';
     return;
   }
 
   try {
-    const url = MASTER_SHEET_CSV_URL + (MASTER_SHEET_CSV_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const url = masterUrl + (masterUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
+    if (_loadEpoch !== epoch) return;  // project switched while fetching — discard
     const parsed = parseMasterCSV(text);
     if (!parsed) throw new Error('could not parse Master Sheet');
     masterTasks = parsed;
@@ -1556,6 +1611,7 @@ async function loadMasterSheetData() {
     syncExecutionTasks();
     if (viewMode === 'execution' && allTasks.length) renderAll();
   } catch (e) {
+    if (_loadEpoch !== epoch) return;
     masterTasks = [];
     masterSheetLoadError = e.message;
     syncExecutionTasks();
@@ -1631,23 +1687,29 @@ function parseMilestonesCSV(text) {
 }
 
 async function loadMilestoneSheetData() {
-  if (!MILESTONES_CSV_URL || MILESTONES_CSV_URL === 'YOUR_MILESTONES_CSV_URL_HERE') {
+  const epoch = _loadEpoch;
+  const msUrl = MILESTONES_CSV_URL();
+  if (!msUrl) {
     milestoneSheetLoadError = '';
     return;
   }
 
   try {
-    const url = MILESTONES_CSV_URL + (MILESTONES_CSV_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const url = msUrl + (msUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
+    if (_loadEpoch !== epoch) return;  // project switched while fetching — discard
     const parsed = parseMilestonesCSV(text);
     if (!parsed) throw new Error('could not parse MILESTONES sheet');
     milestones = parsed;
     milestoneSheetLoadError = '';
     renderMilestoneList();
-    if (allTasks.length) renderTable();
+    // Use renderAll (not renderTable) so the milestone gate markers refresh
+    // correctly regardless of whether planning, execution, or dashboard is active.
+    if (allTasks.length) renderAll();
   } catch (e) {
+    if (_loadEpoch !== epoch) return;
     milestoneSheetLoadError = e.message;
     console.warn('[MILESTONES] Background load failed:', e);
   }
@@ -1662,27 +1724,54 @@ function debugTasks(tasks) {
   if (phase1.length) console.log('[RASIC] First 3 Phase 1 tasks:', phase1.slice(0,3));
 }
 
+// ── LOAD ABORT CONTROLLER ─────────────────────────────────────────────────────
+// Cancels in-flight fetches from the previous project when the user switches
+// rapidly. Prevents stale data from a slow network response landing in the
+// wrong project's state. Each loadData() call gets a fresh controller.
+let _loadController = null;
+
 // ── LOAD ──────────────────────────────────────────────────────────────────────
 async function loadData() {
+  // Cancel any fetch still running from a prior loadData() call.
+  if (_loadController) _loadController.abort();
+  _loadController = new AbortController();
+  const signal = _loadController.signal;
+
+  // Increment epoch — background loaders (master, milestones) capture this and
+  // discard their results if it has changed by the time their fetch resolves.
+  _loadEpoch++;
+  const sheetUrl = SHEET_CSV_URL();
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
+
+  // Reset all data so stale info from a previous project never bleeds through.
+  allTasks = []; masterTasks = []; executionTasks = []; milestones = [];
+  executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
+  renderMilestoneList();
+
+  // Fire background loads for the active project's optional sheets.
   loadMasterSheetData();
   loadMilestoneSheetData();
 
-  if (!SHEET_CSV_URL || SHEET_CSV_URL === 'YOUR_GOOGLE_SHEET_CSV_URL_HERE') {
+  // Update page header and browser tab title to reflect selected project.
+  document.getElementById('project-title').textContent = proj().name + ' — RASIC GANTT';
+  document.title = proj().name + ' — RASIC Gantt';
+
+  if (!sheetUrl) {
     usingDemo = true; allTasks = DEMO_TASKS;
     syncExecutionTasks();
     setStatus('demo mode', false);
-    document.getElementById('last-updated').textContent = 'demo data — connect your sheet';
+    document.getElementById('last-updated').textContent = 'demo data — add a Planning Sheet URL to PROJECTS config';
     renderAll(); return;
   }
 
   try {
-    const url = SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
-    const res = await fetch(url);
+    const url = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const res = await fetch(url, { signal });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
+    if (signal.aborted) return;  // project switched while fetching — discard
     const parsed = parseCSV(text);
     if (!parsed) throw new Error('could not parse sheet — open browser console (F12) to see which headers were detected. Required: Activity/Task column + Start/End date columns');
     debugTasks(parsed);
@@ -1693,6 +1782,7 @@ async function loadData() {
     document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
     renderAll();
   } catch(e) {
+    if (e.name === 'AbortError') return;  // intentional cancel — don't show error
     console.warn('Sheet load failed:', e);
     allTasks = DEMO_TASKS; usingDemo = true;
     syncExecutionTasks();
@@ -1700,7 +1790,7 @@ async function loadData() {
     document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
     const errEl = document.getElementById('error-msg');
     errEl.style.display = 'block';
-    errEl.textContent = '⚠ Could not load Google Sheet: ' + e.message + '. Showing demo data.';
+    errEl.textContent = '⚠ Unable to load project "' + proj().name + '": ' + e.message + '. Showing demo data.';
     renderAll();
   }
 }
@@ -1708,6 +1798,40 @@ async function loadData() {
 function setStatus(text, live) {
   document.getElementById('status-text').textContent = text;
   document.getElementById('status-dot').style.background = live ? 'var(--done)' : 'var(--p2)';
+}
+
+// ── PROJECT SWITCHER ──────────────────────────────────────────────────────────
+// Called by the project <select> in the header.  Persists the choice to
+// localStorage, resets all transient state, then triggers a full reload so
+// every URL-dependent subsystem (planning, master, milestones) picks up the
+// new project's URLs automatically.
+function switchProject(projectId) {
+  if (!PROJECTS[projectId]) return;         // guard against stale option values
+  if (projectId === activeProjectId) return; // no-op if already selected
+
+  activeProjectId = projectId;
+  localStorage.setItem(LS_KEY, projectId);
+
+  // Reset view state so the new project starts in a clean slate.
+  viewMode = 'planning';
+  dashboardActive = false;
+  activeOwner = '';
+  collapsedFuncs.clear();
+  taskMilestones.clear();
+  zoomMode = 'overview';
+  zoomMonth = null;
+
+  syncViewToggle();
+  syncDashboardToggle();
+
+  // Reset filter dropdowns.
+  ['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+
+  // Full data reload from the new project's sheets.
+  loadData();
 }
 
 // ── MILESTONES — sheet-driven, read-only in app ───────────────────────────────
@@ -1838,7 +1962,10 @@ function filterByOwner(name) {
   activeOwner = (activeOwner === name) ? '' : name;
   const sel = document.getElementById('ownerFilter');
   if (sel) sel.value = activeOwner;
-  renderTable();
+  // Route through renderAll so execution view, planning view, and dashboard
+  // all respond correctly regardless of which mode is currently active.
+  if (dashboardActive) renderDashboard();
+  else renderAll();
 }
 
 // ── TASK-LINKED MILESTONES — per-row diamond at task end date ─────────────────
@@ -2550,14 +2677,15 @@ function drillMonth(date) { zoomMode = 'month'; zoomMonth = date; renderTable();
 function drillBack()       { zoomMode = 'overview'; zoomMonth = null; renderTable(); }
 
 // Wire filters
-['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
+['funcFilter','phaseFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
-    if (dashboardActive) renderDashboard(); else renderTable();
+    if (dashboardActive) renderDashboard(); else renderAll();
   });
 });
-// Sync ownerFilter dropdown -> activeOwner state
+// ownerFilter: sync activeOwner state AND re-render in one listener (not two).
 document.getElementById('ownerFilter').addEventListener('change', function() {
   activeOwner = this.value;
+  if (dashboardActive) renderDashboard(); else renderAll();
 });
 
 // ── Single global delegated listener on document.body (stable, survives re-renders) ──
@@ -2858,7 +2986,9 @@ function renderDashboard() {
     : `<span style="color:var(--text3)">Showing Global Project Metrics (Unfiltered)</span>`;
 
   const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
-  const savedNote = window.__dashboardReportNote || '';
+  // Notes are scoped per project so switching projects starts with a clean slate.
+  const noteKey = '__dashboardReportNote_' + activeProjectId;
+  const savedNote = window[noteKey] || '';
 
   const html = `
     <div class="report-toolbar">
@@ -2982,7 +3112,10 @@ function renderDashboard() {
 
   const noteEl = document.getElementById('reportNote');
   if (noteEl) {
-    noteEl.addEventListener('input', () => { window.__dashboardReportNote = noteEl.value; });
+    noteEl.addEventListener('input', () => {
+      const noteKey = '__dashboardReportNote_' + activeProjectId;
+      window[noteKey] = noteEl.value;
+    });
   }
 }
 
@@ -2994,7 +3127,7 @@ function buildReportDocument() {
   const isExec = viewMode === 'execution';
   const today = new Date();
   const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
-  const note = (window.__dashboardReportNote || '').trim();
+  const note = (window['__dashboardReportNote_' + activeProjectId] || '').trim();
 
   // Clone the report body and strip the interactive note widget — replace
   // it with a static rendering of the note text in the printable doc.
@@ -3197,6 +3330,16 @@ function downloadDashboardReport() {
   setTimeout(() => { try { win.print(); } catch(e){} }, 600);
 }
 
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+// Populate the project selector from the PROJECTS registry.
+(function initProjectSelector() {
+  const sel = document.getElementById('projectSelector');
+  if (!sel) return;
+  sel.innerHTML = Object.entries(PROJECTS).map(([id, p]) =>
+    `<option value="${escapeHTML(id)}"${id === activeProjectId ? ' selected' : ''}>${escapeHTML(p.name)}</option>`
+  ).join('');
+})();
 
 setInterval(loadData, 5 * 60 * 1000);
 
