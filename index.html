@@ -885,6 +885,138 @@ td {
   box-shadow: none;
 }
 .report-btn.secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Task Detail Drawer ─────────────────────────────────────────────────── */
+#task-drawer {
+  position: fixed;
+  top: 0; right: 0;
+  width: 360px;
+  height: 100vh;
+  background: var(--surface);
+  border-left: 1px solid var(--border2);
+  box-shadow: -8px 0 40px rgba(0,0,0,0.45);
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.22s cubic-bezier(0.22,1,0.36,1);
+  overflow: hidden;
+}
+#task-drawer.open { transform: translateX(0); }
+#task-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  z-index: 8999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s;
+}
+#task-drawer-overlay.visible { opacity: 1; pointer-events: auto; }
+#task-drawer-header {
+  flex: 0 0 auto;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+#task-drawer-header h2 {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  margin: 0;
+}
+#task-drawer-close {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  margin-top: -1px;
+}
+#task-drawer-close:hover { color: var(--text); }
+#task-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 20px 20px;
+}
+.td-rag-bar {
+  height: 3px;
+  border-radius: 2px;
+  margin-bottom: 14px;
+  flex: 0 0 auto;
+}
+.td-section {
+  margin-bottom: 16px;
+}
+.td-section-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.td-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.td-field:last-child { border-bottom: none; }
+.td-field-key {
+  flex: 0 0 110px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text3);
+  padding-top: 1px;
+}
+.td-field-val {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.td-extra-badge {
+  display: inline-block;
+  background: rgba(99,102,241,0.12);
+  border: 1px solid rgba(99,102,241,0.28);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+/* Extra field columns in table */
+.extra-col-th {
+  font-size: 10px !important;
+  color: var(--accent) !important;
+  opacity: 0.85;
+  min-width: 80px;
+}
+.extra-col-td {
+  font-size: 10.5px;
+  color: var(--text2);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Clickable task rows */
+tr.task-row { cursor: pointer; }
+tr.task-row:hover td { background: rgba(99,102,241,0.07); }
 </style>
 </head>
 <body>
@@ -963,6 +1095,16 @@ td {
 <div id="dashboard-wrap"></div>
 </div><!-- /app-content -->
 </div><!-- /app-shell -->
+
+<!-- Task Detail Drawer -->
+<div id="task-drawer-overlay" onclick="closeTaskDrawer()"></div>
+<div id="task-drawer">
+  <div id="task-drawer-header">
+    <h2 id="task-drawer-title">Activity Details</h2>
+    <button id="task-drawer-close" onclick="closeTaskDrawer()" title="Close">✕</button>
+  </div>
+  <div id="task-drawer-body"></div>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1120,6 +1262,8 @@ let masterSheetLoadError = '';
 let milestoneSheetLoadError = '';
 let usingDemo = false;
 let viewMode = 'planning';
+// Holds the last rendered task array so the drawer can access it by row index
+let _lastRenderedTasks = [];
 
 function syncViewToggle() {
   const btn = document.getElementById('viewToggle');
@@ -1224,6 +1368,9 @@ function syncExecutionTasks() {
     const master = masterMap.get(taskMergeKey(task)) || null;
     if (master) matched++;
 
+    // Merge extra fields: planning extras first, master extras overlay (master wins on key collision)
+    const mergedExtra = Object.assign({}, task._extra || {}, master ? (master._extra || {}) : {});
+
     return {
       ...task,
       planningStart: task.start,
@@ -1241,6 +1388,7 @@ function syncExecutionTasks() {
       executionStatus: master ? master.status : '',
       remark: master ? master.remark : '',
       progressPct: master ? master.progressPct : '',
+      _extra: mergedExtra,
     };
   });
 
@@ -1429,6 +1577,14 @@ function parseCSV(text) {
     return null;
   }
 
+  // ── Extra (project-specific) field definitions ────────────────────────────
+  // Any column not claimed by the core Gantt fields is preserved as-is.
+  const coreColSet = new Set([phaseCol, funcCol, actCol, startCol, endCol, ownerCol, statusCol, priorityCol].filter(i => i >= 0));
+  const rawHeaders = parseCSVLine(rawLines[headerIdx]);
+  const extraFieldDefs = headers
+    .map((h, i) => ({ i, label: rawHeaders[i] ? rawHeaders[i].replace(/"/g,'').trim() : h }))
+    .filter(({i}) => !coreColSet.has(i) && headers[i]); // skip claimed + blank headers
+
   let skippedNoActivity = 0, skippedNoDate = 0, firstSkippedDateSample = null;
 
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
@@ -1467,6 +1623,13 @@ function parseCSV(text) {
     if (/^\d/.test(rawStatus) || rawStatus.length > 30) rawStatus = '';
     const rawPriority = priorityCol >= 0 ? (cells[priorityCol] || '').trim() : '';
 
+    // Collect project-specific extra fields
+    const _extra = {};
+    extraFieldDefs.forEach(({i: ci, label}) => {
+      const v = (cells[ci] || '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
+      if (v) _extra[label] = v;
+    });
+
     tasks.push({
       phase:    rowPhase || currentPhase,
       func:     currentFunc || 'General',
@@ -1476,6 +1639,7 @@ function parseCSV(text) {
       owner:  rawOwner,
       status: rawStatus,
       priority: rawPriority,
+      _extra,
     });
   }
   console.log(`[RASIC] Parsed ${tasks.length} tasks | skipped no-activity: ${skippedNoActivity} | skipped no-date: ${skippedNoDate}`);
@@ -1551,6 +1715,13 @@ function parseMasterCSV(text) {
     return null;
   }
 
+  // Extra (project-specific) columns not claimed by the known master fields
+  const masterCoreSet = new Set([funcCol, actCol, startCol, plannedEndCol, leadTimeCol, revisedEndCol, actualEndCol, agingCol, respCol, acctCol, statusCol, remarkCol, progressCol].filter(i => i >= 0));
+  const rawHeaders = parseCSVLine(rawLines[headerIdx]);
+  const masterExtraDefs = headers
+    .map((h, i) => ({ i, label: rawHeaders[i] ? rawHeaders[i].replace(/"/g,'').trim() : h }))
+    .filter(({i}) => !masterCoreSet.has(i) && headers[i]);
+
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (!line.trim()) continue;
@@ -1561,6 +1732,12 @@ function parseMasterCSV(text) {
 
     const activity = actCol >= 0 ? clean(cells[actCol]) : '';
     if (!activity) continue;
+
+    const _extra = {};
+    masterExtraDefs.forEach(({i: ci, label}) => {
+      const v = clean(cells[ci] || '');
+      if (v) _extra[label] = v;
+    });
 
     rows.push({
       func: currentFunc || 'General',
@@ -1576,6 +1753,7 @@ function parseMasterCSV(text) {
       status: statusCol >= 0 ? clean(cells[statusCol]) : '',
       remark: remarkCol >= 0 ? clean(cells[remarkCol]) : '',
       progressPct: progressCol >= 0 ? parseProgress(cells[progressCol]) : '',
+      _extra,
     });
   }
 
@@ -2249,6 +2427,19 @@ function renderExecutionTable() {
       }).join('')}
     </div>` : '';
 
+  // ── Extra field columns (execution view) ────────────────────────────────
+  const execExtraNames = [];
+  const execExtraSet = new Set();
+  tasks.forEach(t => {
+    if (t._extra) Object.keys(t._extra).forEach(k => {
+      if (!execExtraSet.has(k)) { execExtraSet.add(k); execExtraNames.push(k); }
+    });
+  });
+  const execExtraCount = execExtraNames.length;
+
+  // Store for drawer access
+  _lastRenderedTasks = tasks;
+
   const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
   let html = `<table style="min-width:1450px">
   <thead>
@@ -2262,6 +2453,7 @@ function renderExecutionTable() {
       <th style="min-width:86px">actual end</th>
       <th style="min-width:54px">aging</th>
       <th style="min-width:96px">status</th>
+      ${execExtraNames.map(n => `<th class="extra-col-th" title="Project-specific field">${escapeHTML(n)}</th>`).join('')}
       <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
@@ -2288,7 +2480,7 @@ function renderExecutionTable() {
       : '';
 
     html += `<tr class="section-row${isCollapsed?' collapsed':''}">
-      <td colspan="10" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
+      <td colspan="${10 + execExtraCount}" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
         <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
         <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
         ${escapeHTML(f)}
@@ -2343,7 +2535,13 @@ function renderExecutionTable() {
         data-ms-rag="${rag}"
         data-ms-rag-label="${ragLabel}"></div>`;
 
-      html += `<tr${isCollapsed?' style="display:none"':''}>
+      // Extra field cells (execution view)
+      const execExtraCells = execExtraNames.map(n =>
+        `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
+      ).join('');
+
+      const execTaskIdx = _lastRenderedTasks.indexOf(t);
+      html += `<tr class="task-row"${isCollapsed?' style="display:none"':''} data-action="show-detail" data-task-idx="${execTaskIdx}">
         <td class="activity-cell">
           <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
         <td>${t.responsible
@@ -2356,6 +2554,7 @@ function renderExecutionTable() {
         <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
         <td class="date-cell">${dash(t.aging)}</td>
         <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
+        ${execExtraCells}
         <td class="bar-col">
           <div class="bar-outer">
             ${gridLines}
@@ -2556,7 +2755,21 @@ function renderTable() {
   // Old milestone banner row removed — flag pins in <th> replace it
   const milestoneBarHTML = '';
 
-  // ── Table ──────────────────────────────────────────────────────────────────
+  // ── Extra field columns ────────────────────────────────────────────────────
+  // Collect all extra-field names present across the filtered task set, in
+  // first-seen order. These are appended after the standard metadata columns.
+  const extraFieldNames = [];
+  const extraFieldSet = new Set();
+  tasks.forEach(t => {
+    if (t._extra) Object.keys(t._extra).forEach(k => {
+      if (!extraFieldSet.has(k)) { extraFieldSet.add(k); extraFieldNames.push(k); }
+    });
+  });
+  const extraColCount = extraFieldNames.length;
+
+  // Store for drawer access
+  _lastRenderedTasks = tasks;
+
   const funcs = [...new Set(tasks.map(t=>t.func).filter(Boolean))];
   let html = `<table>
   <thead>
@@ -2566,6 +2779,7 @@ function renderTable() {
       <th style="min-width:58px">phase</th>
       <th style="min-width:68px">start</th>
       <th style="min-width:68px">end</th>
+      ${extraFieldNames.map(n => `<th class="extra-col-th" title="Project-specific field">${escapeHTML(n)}</th>`).join('')}
       <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>
@@ -2587,7 +2801,7 @@ function renderTable() {
 
     // Section row — data-action attribute, handled by delegated listener
     html += `<tr class="section-row${isCollapsed?' collapsed':''}">
-      <td colspan="6" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
+      <td colspan="${6 + extraColCount}" data-action="toggle-func" data-func='${escapeHTML(f)}' style="cursor:pointer">
         <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
         <span style="margin-right:8px;color:var(--text3);font-size:10px">${ft.length}</span>
         ${escapeHTML(f)}
@@ -2642,7 +2856,13 @@ function renderTable() {
         data-ms-rag="${rag}"
         data-ms-rag-label="${ragLabel}"></div>`;
 
-      html += `<tr${isCollapsed?' style="display:none"':''}>
+      // Extra field cells
+      const extraCells = extraFieldNames.map(n =>
+        `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
+      ).join('');
+
+      const taskIdx = _lastRenderedTasks.indexOf(t);
+      html += `<tr class="task-row"${isCollapsed?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
         <td class="activity-cell">
           <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
         <td>${t.owner
@@ -2651,6 +2871,7 @@ function renderTable() {
         <td><span class="phase-badge ${t.phase==='Phase 1'?'p1b':'p2b'}">${escapeHTML(t.phase)}</span></td>
         <td class="date-cell">${fmt(t.start)}</td>
         <td class="date-cell">${fmt(t.end)}</td>
+        ${extraCells}
         <td class="bar-col">
           <div class="bar-outer">
             ${gridLines}
@@ -2688,6 +2909,97 @@ document.getElementById('ownerFilter').addEventListener('change', function() {
   if (dashboardActive) renderDashboard(); else renderAll();
 });
 
+// ── Task Detail Drawer ────────────────────────────────────────────────────────
+function showTaskDetail(t) {
+  if (!t) return;
+  const rag = t._rag || t._execRag || 'grey';
+  const ragColors = { red: 'var(--rag-red)', amber: 'var(--rag-amber)', green: 'var(--rag-green)', blue: 'var(--accent)', grey: 'var(--text3)' };
+  const ragLabels = { red: 'Overdue', amber: 'At Risk', green: 'Completed', blue: 'In Progress', grey: 'Not Started' };
+  const ragColor  = ragColors[rag]  || 'var(--text3)';
+  const ragLabel  = ragLabels[rag]  || 'Unknown';
+
+  const fmtDate = s => {
+    if (!s) return '—';
+    const d = new Date(s + 'T00:00:00');
+    return isNaN(d) ? s : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const field = (key, val) => {
+    if (!val) return '';
+    return `<div class="td-field"><span class="td-field-key">${escapeHTML(key)}</span><span class="td-field-val">${escapeHTML(String(val))}</span></div>`;
+  };
+
+  // Core required fields
+  let coreHTML = `
+    ${field('Function',    t.func)}
+    ${field('Phase',       t.phase)}
+    ${field('Start',       fmtDate(t.start || t._execStart || t.startDate))}
+    ${field('End',         fmtDate(t.end || t._execEnd || t.revisedEndDate || t.plannedEndDate))}
+    ${field('Owner',       t.owner || t.responsible || t.planningOwner)}
+    ${field('Status',      t.status || t.executionStatus)}
+    ${field('Priority',    t.priority)}
+    ${field('Remarks',     t.remark)}
+    ${field('Progress',    t.progressPct !== '' && t.progressPct !== undefined ? t.progressPct + '%' : '')}
+  `.trim();
+
+  // Execution-specific fields (only if they exist and aren't already covered)
+  let execHTML = '';
+  if (viewMode === 'execution') {
+    const execFields = [
+      ['Responsible',    t.responsible],
+      ['Accountable',    t.accountable],
+      ['Planned End',    fmtDate(t.plannedEndDate)],
+      ['Revised End',    fmtDate(t.revisedEndDate)],
+      ['Actual End',     fmtDate(t.actualEndDate)],
+      ['Lead Time',      t.leadTimeRequested],
+      ['Aging',          t.aging],
+    ].filter(([,v]) => v);
+    if (execFields.length) {
+      execHTML = `<div class="td-section">
+        <div class="td-section-label">Execution tracking</div>
+        ${execFields.map(([k,v]) => field(k, v)).join('')}
+      </div>`;
+    }
+  }
+
+  // Extra project-specific fields
+  let extraHTML = '';
+  const extras = t._extra ? Object.entries(t._extra).filter(([,v]) => v) : [];
+  if (extras.length) {
+    extraHTML = `<div class="td-section">
+      <div class="td-section-label">
+        <span class="td-extra-badge">${proj().name || activeProjectId}</span> project fields
+      </div>
+      ${extras.map(([k,v]) => field(k, v)).join('')}
+    </div>`;
+  }
+
+  const body = `
+    <div class="td-rag-bar" style="background:${ragColor}"></div>
+    <div class="td-section">
+      <div class="td-section-label">core fields — <span style="color:${ragColor}">${ragLabel}</span></div>
+      ${coreHTML}
+    </div>
+    ${execHTML}
+    ${extraHTML}
+  `;
+
+  document.getElementById('task-drawer-title').textContent = t.activity || 'Activity Details';
+  document.getElementById('task-drawer-body').innerHTML = body;
+  document.getElementById('task-drawer').classList.add('open');
+  document.getElementById('task-drawer-overlay').classList.add('visible');
+}
+
+function closeTaskDrawer() {
+  document.getElementById('task-drawer').classList.remove('open');
+  document.getElementById('task-drawer-overlay').classList.remove('visible');
+}
+
+// Close drawer on Escape key
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeTaskDrawer();
+});
+
 // ── Single global delegated listener on document.body (stable, survives re-renders) ──
 document.body.addEventListener('click', function(e) {
   const el = e.target.closest('[data-action]');
@@ -2703,6 +3015,12 @@ document.body.addEventListener('click', function(e) {
 
   } else if (action === 'toggle-task-ms') {
     toggleTaskMilestone(el.dataset.key, el);
+
+  } else if (action === 'show-detail') {
+    // Ignore if the click was on an interactive child (milestone btn, owner pill)
+    if (e.target.closest('[data-action="toggle-task-ms"],[data-action="filter-owner"]')) return;
+    const idx = parseInt(el.dataset.taskIdx, 10);
+    if (!isNaN(idx) && _lastRenderedTasks[idx]) showTaskDetail(_lastRenderedTasks[idx]);
 
   } else if (action === 'toggle-ms-panel') {
     const header = document.getElementById('ms-panel-header');
