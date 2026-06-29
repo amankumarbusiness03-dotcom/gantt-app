@@ -1182,8 +1182,22 @@ const PROJECTS = {
 
   pvh: {
     name: 'PVH',
-    // 'partName' fuzzy-matches _extra['Part Name']; 'function' maps to t.func
     grouping: ['partName', 'function'],
+    columns: [
+      { key: 'partName',    label: 'Part Name',        minWidth: 110 },
+      { key: 'supplyModel', label: 'Supply Model',     minWidth: 100 },
+      { key: 'function',    label: 'Function',         minWidth: 90  },
+      { key: 'activity',    label: 'Activity',         minWidth: 200 },
+      { key: 'responsible', label: 'Responsible',      minWidth: 90  },
+      { key: 'accountable', label: 'Accountable',      minWidth: 90  },
+      { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
+      { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
+      { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
+      { key: 'plannedEnd',  label: 'Planned End Date', minWidth: 100, isDate: true },
+      { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
+      { key: 'aging',       label: 'Aging',            minWidth: 60  },
+      { key: 'status',      label: 'Status',           minWidth: 90  },
+    ],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',
     master:     '',
     milestones: '',
@@ -1320,6 +1334,9 @@ let _lastRenderedTasks = [];
 function syncViewToggle() {
   const btn = document.getElementById('viewToggle');
   if (!btn) return;
+  // Hide the planning/execution toggle for projects that use a custom column layout
+  if (proj().columns) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
   const isExecution = viewMode === 'execution';
   btn.textContent = isExecution ? 'planning view' : 'execution view';
   btn.title = isExecution ? 'show current planning gantt view' : 'show execution tracking view';
@@ -2326,6 +2343,7 @@ function renderAll() {
   }
   applyDashboardVisibility();
   if (dashboardActive) renderDashboard();
+  else if (proj().columns) renderCustomColumnsTable();
   else renderTable();
 }
 let zoomMode = 'overview';
@@ -2722,6 +2740,282 @@ function renderExecutionTable() {
   html += buildExecGroupRows(tree, false);
 
   html += `</tbody></table>`;
+
+  const zoomEl = document.getElementById('zoom-bar');
+  if (zoomEl) zoomEl.innerHTML = zoomBarHTML;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('table-wrap').style.display = 'block';
+  document.getElementById('table-wrap').innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTOM COLUMN RENDERER — used when proj().columns is defined (e.g. PVH).
+// Array uses the original renderTable / renderExecutionTable unchanged.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Resolves a configured column key to the raw value on a merged task object.
+// Covers core Gantt fields and falls back to _extra with fuzzy matching.
+function resolveColumnValue(task, key) {
+  const norm = s => (s || '').toLowerCase().replace(/[\s_\-\/]+/g, '');
+  const nk = norm(key);
+  const coreMap = {
+    activity:    () => task.activity,
+    function:    () => task.func,
+    func:        () => task.func,
+    phase:       () => task.phase,
+    owner:       () => task.owner || task.planningOwner,
+    responsible: () => task.responsible || task.owner,
+    accountable: () => task.accountable,
+    startdate:   () => task.startDate || task.start,
+    start:       () => task.start,
+    plannedend:  () => task.plannedEndDate || task.end,
+    actualend:   () => task.actualEndDate,
+    revisedend:  () => task.revisedEndDate,
+    leadtime:    () => task.leadTimeRequested,
+    aging:       () => task.aging,
+    status:      () => task.executionStatus || task.status,
+    progress:    () => (task.progressPct !== '' && task.progressPct !== undefined) ? task.progressPct + '%' : '',
+    remark:      () => task.remark,
+    remarks:     () => task.remark,
+  };
+  if (coreMap[nk]) return coreMap[nk]() || '';
+  if (task._extra) {
+    const keys = Object.keys(task._extra);
+    const match = keys.find(k => norm(k) === nk)
+                || keys.find(k => norm(k).includes(nk) || nk.includes(norm(k)));
+    if (match) return task._extra[match] || '';
+  }
+  return '';
+}
+
+// Renders the custom column table for projects with proj().columns defined.
+// Always uses executionTasks (merged planning + master) so every defined
+// column — including master-sheet fields like responsible/accountable — is
+// available even when only the planning sheet has loaded (fields will be '').
+function renderCustomColumnsTable() {
+  const cols = proj().columns || [];
+  const colCount = cols.length + 1; // last col = Gantt bar
+
+  const selFunc  = document.getElementById('funcFilter').value;
+  const selPhase = document.getElementById('phaseFilter').value;
+  const selOwner = document.getElementById('ownerFilter').value;
+  if (selOwner !== activeOwner) activeOwner = selOwner;
+
+  let tasks = executionTasks.filter(t => {
+    if (selFunc  && t.func !== selFunc)  return false;
+    if (selPhase && t.phase !== selPhase) return false;
+    const owner = t.responsible || t.owner;
+    if (activeOwner && owner !== activeOwner) return false;
+    return true;
+  }).map(t => {
+    const execStart = t.startDate || t.start;
+    const execEnd   = t.revisedEndDate || t.plannedEndDate || t.end;
+    return { ...t, _execStart: execStart, _execEnd: execEnd, _rag: executionRagStatus(t) };
+  });
+
+  _lastRenderedTasks = tasks;
+
+  // ── Stats bar ──────────────────────────────────────────────────────────────
+  const rc = { red:0, amber:0, green:0 };
+  tasks.forEach(t => { if (t._rag) rc[t._rag] = (rc[t._rag] || 0) + 1; });
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-val">${tasks.length}</div><div class="stat-lbl">total tasks</div></div>
+    <div class="stat rag-red"><div class="stat-val" style="color:var(--rag-red)">${rc.red}</div><div class="stat-lbl">overdue</div></div>
+    <div class="stat rag-amber"><div class="stat-val" style="color:var(--rag-amber)">${rc.amber}</div><div class="stat-lbl">at risk</div></div>
+    <div class="stat"><div class="stat-val" style="color:var(--rag-green)">${rc.green}</div><div class="stat-lbl">done</div></div>
+  `;
+
+  const parseLocal = s => { if (!s) return null; const [y,m,d] = s.split('-').map(Number); if (!y||!m||!d) return null; return new Date(y,m-1,d); };
+  const fmt = s => { const d = parseLocal(s); return d ? d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) : (s || ''); };
+
+  const allD = tasks.flatMap(t => [parseLocal(t._execStart), parseLocal(t._execEnd)]).filter(d => d && !isNaN(d));
+
+  if (!allD.length) {
+    document.getElementById('zoom-bar').innerHTML = '';
+    document.getElementById('table-wrap').innerHTML = `<table><tbody><tr class="empty-row"><td colspan="${colCount}">no tasks match filters</td></tr></tbody></table>`;
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('table-wrap').style.display = 'block';
+    return;
+  }
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  let minD, maxD;
+  if (zoomMode === 'month' && zoomMonth) {
+    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
+    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0);
+    tasks = tasks.filter(t => { const s = parseLocal(t._execStart), e = parseLocal(t._execEnd); return s && e && s <= maxD && e >= minD; });
+  } else {
+    const gMin = new Date(Math.min(...allD)), gMax = new Date(Math.max(...allD));
+    minD = new Date(gMin); minD.setDate(minD.getDate()-3);
+    maxD = new Date(gMax); maxD.setDate(maxD.getDate()+3);
+  }
+  const totalMs = maxD - minD;
+  const pctOf = d => Math.max(0, Math.min(100, ((d-minD)/totalMs)*100));
+  const todayPct = pctOf(today);
+
+  // ── Tick marks ─────────────────────────────────────────────────────────────
+  let majorTicks = [];
+  if (zoomMode === 'month' && zoomMonth) {
+    const dim = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+    for (let d = 1; d <= dim; d++) {
+      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      majorTicks.push({ label: String(d), p: pctOf(dt), bold: dt.getDay() === 1 });
+    }
+  } else {
+    let td2 = new Date(minD.getFullYear(), minD.getMonth(), 1);
+    while (td2 <= maxD) {
+      const p = pctOf(td2);
+      if (p >= -2 && p <= 102) majorTicks.push({ label: td2.toLocaleDateString('en-US',{month:'short',year:'2-digit'}), p });
+      td2.setMonth(td2.getMonth()+1);
+    }
+  }
+  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+    ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
+  </div>`;
+
+  // ── Zoom bar ───────────────────────────────────────────────────────────────
+  let zoomBarHTML = '';
+  if (zoomMode === 'overview') {
+    const months = [];
+    let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
+    const endMo = new Date(Math.max(...allD));
+    while (td3 <= endMo) { months.push(new Date(td3)); td3.setMonth(td3.getMonth()+1); }
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:6px;padding:6px 28px;border-bottom:1px solid var(--border);flex-wrap:wrap;background:var(--surface2)">
+      <span style="font-size:10px;font-family:var(--mono);color:var(--text3);margin-right:4px">drill into month →</span>
+      ${months.map(m=>{
+        const label = m.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+        const isToday = today.getMonth()===m.getMonth()&&today.getFullYear()===m.getFullYear();
+        return `<button onclick="drillMonth(new Date(${m.getFullYear()},${m.getMonth()},1))" style="background:${isToday?'rgba(247,95,95,0.15)':'var(--surface)'};border:1px solid ${isToday?'var(--today)':'var(--border2)'};color:${isToday?'var(--today)':'var(--text2)'};font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">${label}</button>`;
+      }).join('')}
+    </div>`;
+  } else {
+    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
+      <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">← overview</button>
+      <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} — day-level view</span>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
+      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
+    </div>`;
+  }
+
+  // ── Grouping tree ──────────────────────────────────────────────────────────
+  const grouping = proj().grouping || ['function'];
+  const tree = buildGroupTree(tasks, grouping);
+  const excludedGrpKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
+  const minTableWidth = cols.reduce((s, c) => s + (c.minWidth || 80), 0) + (zoomMode==='month'?620:460);
+
+  let html = `<table style="min-width:${minTableWidth}px">
+  <thead>
+    <tr>
+      ${cols.map(c => `<th style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`).join('')}
+      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${ticksHTML}</th>
+    </tr>
+  </thead><tbody>`;
+
+  const segOf = (sDate, eDate) => {
+    if (!sDate || !eDate || eDate < minD || sDate > maxD || eDate < sDate) return null;
+    const cs = sDate < minD ? minD : sDate, ce = eDate > maxD ? maxD : eDate;
+    return { left: pctOf(cs), width: Math.max(0.6, pctOf(ce) - pctOf(cs)) };
+  };
+
+  // ── Recursive group row builder ─────────────────────────────────────────────
+  function buildCustomGroupRows(nodes, isParentHidden) {
+    let out = '';
+    nodes.forEach(node => {
+      const isCollapsed = collapsedGroups.has(node.path);
+      const childrenHidden = isParentHidden || isCollapsed;
+      const rc2 = { red:0, amber:0, green:0 };
+      node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
+
+      if (!node.isLeafGroup) {
+        // ── Part-level header ────────────────────────────────────────────────
+        const constMeta = getGroupConstantMeta(node.tasks, excludedGrpKeys);
+        const metaEntries = Object.entries(constMeta).slice(0, 4);
+        const chips = [
+          ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
+          `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
+          rc2.green ? `<span class="part-meta-chip part-meta-green"><span class="part-meta-key">Done:</span> ${rc2.green}</span>` : '',
+          rc2.amber ? `<span class="part-meta-chip part-meta-amber"><span class="part-meta-key">At Risk:</span> ${rc2.amber}</span>` : '',
+          rc2.red   ? `<span class="part-meta-chip part-meta-red"><span class="part-meta-key">Overdue:</span> ${rc2.red}</span>` : '',
+        ].filter(Boolean).join('');
+        out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${colCount}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
+            <div class="group-part-header"><span class="section-toggle">${isCollapsed?'▶':'▼'}</span><span class="group-part-name">${escapeHTML(node.name)}</span></div>
+            <div class="group-part-meta">${chips}</div>
+          </td>
+        </tr>`;
+        out += buildCustomGroupRows(node.children, childrenHidden);
+
+      } else {
+        // ── Function-level header ────────────────────────────────────────────
+        const ragSummary = rc2.red
+          ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${rc2.red} overdue</span>`
+          : rc2.amber
+          ? `<span style="font-size:9px;color:var(--rag-amber);font-family:var(--mono);margin-left:8px">● ${rc2.amber} at risk</span>`
+          : '';
+        const sublevel = node.depth > 0 ? ' section-sublevel' : '';
+        out += `<tr class="section-row${sublevel}${isCollapsed?' collapsed':''}"${isParentHidden?' style="display:none"':''}>
+          <td colspan="${colCount}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer${node.depth>0?';padding-left:32px':''}">
+            <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+            <span style="margin-right:8px;color:var(--text3);font-size:10px">${node.tasks.length}</span>
+            ${escapeHTML(node.name)}${ragSummary}
+          </td>
+        </tr>`;
+
+        // ── Task rows ──────────────────────────────────────────────────────
+        node.children.forEach(t => {
+          const rag   = t._rag;
+          const color = ragColor(rag);
+          const rClass = ragClass(rag);
+          const ragLbl = {red:'Overdue',amber:'At Risk',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || '';
+
+          const sDate = parseLocal(t._execStart);
+          const eDate = parseLocal(t._execEnd);
+          const gridLines = majorTicks.map(tk =>
+            `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+          ).join('');
+          const todayLine = (todayPct>=0&&todayPct<=100)
+            ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+            : '';
+          const seg = sDate && eDate ? segOf(sDate, eDate) : null;
+          const barHTML = seg
+            ? `<div class="bar-fill ${rClass}" style="left:${seg.left.toFixed(2)}%;width:${seg.width.toFixed(2)}%;background:${color};opacity:0.88" title="${escapeHTML(t.activity)} | ${fmt(t._execStart)} → ${fmt(t._execEnd)}"></div>`
+            : '';
+
+          const msKey = `${t.func}::${t.activity}`;
+          const isTaskMs = taskMilestones.has(msKey);
+          const taskIdx = _lastRenderedTasks.indexOf(t);
+
+          const cellsHTML = cols.map(c => {
+            const val = resolveColumnValue(t, c.key);
+            if (c.key === 'activity') {
+              return `<td class="activity-cell"><span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(val)}</td>`;
+            }
+            if (c.key === 'responsible') {
+              const isActive = val && val === activeOwner ? ' active-owner' : '';
+              return `<td>${val?`<span class="owner-pill${isActive}" data-action="filter-owner" data-owner="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
+            }
+            if (c.key === 'status') {
+              return `<td><span style="font-family:var(--mono);font-size:10px;color:${color};white-space:nowrap">${escapeHTML(val || ragLbl)}</span></td>`;
+            }
+            if (c.isDate) {
+              return `<td class="date-cell">${val?escapeHTML(fmt(val)):'<span style="color:var(--text3)">-</span>'}</td>`;
+            }
+            return `<td${val?'':' style="color:var(--text3)"'}>${val?escapeHTML(val):'-'}</td>`;
+          }).join('');
+
+          out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
+            ${cellsHTML}
+            <td class="bar-col"><div class="bar-outer">${gridLines}${barHTML}${todayLine}</div></td>
+          </tr>`;
+        });
+      }
+    });
+    return out;
+  }
+
+  html += buildCustomGroupRows(tree, false);
+  html += '</tbody></table>';
 
   const zoomEl = document.getElementById('zoom-bar');
   if (zoomEl) zoomEl.innerHTML = zoomBarHTML;
