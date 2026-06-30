@@ -232,6 +232,28 @@ tbody tr {
   contain-intrinsic-size: auto 32px;
 }
 tbody tr:hover td { background: rgba(255,255,255,0.02); }
+/* ── Frozen left columns (Feature: sticky Activity/Function) ──────────────
+   Activity stays pinned across every view (it's always the first row
+   column). Function is only ever a row column for PVH — for Array it's
+   the group/section header instead, so .col-sticky-function simply never
+   gets emitted there and this rule has nothing to attach to. Fixed pixel
+   widths here aren't arbitrary: they match Activity's 220px min-width
+   (PVH) / 200px (Array planning) so the second sticky column's left
+   offset lines up with the first one's actual rendered width. */
+td.activity-cell, th.col-sticky-activity {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: var(--bg);
+}
+th.col-sticky-activity { z-index: 11; } /* above the rest of the sticky thead row (z-index:10) */
+td.col-sticky-function, th.col-sticky-function {
+  position: sticky;
+  left: 220px;
+  z-index: 4;
+  background: var(--bg);
+}
+th.col-sticky-function { z-index: 11; }
 td {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
@@ -764,6 +786,7 @@ td {
   background: rgba(244,63,94,0.1);
 }
 .dash-empty { font-size: 11px; color: var(--text3); font-family: var(--mono); padding: 10px 0; }
+.dash-more-note { font-size: 10px; color: var(--text3); font-family: var(--mono); padding: 8px 0 2px; border-top: 1px dashed var(--border2); margin-top: 6px; }
 
 /* Bottleneck / Resource ranking rows */
 .rank-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1148,6 +1171,8 @@ tr.section-row.section-sublevel td {
       <span id="status-text">live</span>
     </div>
     <div class="filters">
+      <input type="text" id="globalSearch" placeholder="🔍 search activities…"
+             style="background:var(--surface);border:1px solid var(--border2);border-radius:5px;color:var(--text);font-size:11.5px;padding:5px 9px;width:170px;font-family:inherit">
       <select id="projectSelector" title="Switch project" onchange="switchProject(this.value)"
               style="border-color:var(--accent);font-weight:500;color:var(--accent)"></select>
       <select id="funcFilter"><option value="">all functions</option></select>
@@ -1516,6 +1541,7 @@ function toggleViewMode() {
   if (ownerSel) ownerSel.value = '';
   syncViewToggle();
   syncColumnPickerVisibility();
+  saveUIPrefs();
   renderAll();
 }
 
@@ -1533,6 +1559,7 @@ function toggleDashboardMode() {
   App.state.dashboardActive = !App.state.dashboardActive;
   syncDashboardToggle();
   applyDashboardVisibility();
+  saveUIPrefs();
   if (App.state.dashboardActive) renderDashboard();
 }
 
@@ -2319,11 +2346,68 @@ function setStatus(text, live) {
   document.getElementById('status-dot').style.background = live ? 'var(--done)' : 'var(--p2)';
 }
 
+// ── PERSISTENT FILTER & VIEW PREFERENCES ───────────────────────────────────
+// Scoped per-project (same rasic_prefs_<projectId> pattern as the data
+// cache from Step 3), so switching between Array and PVH never bleeds one
+// project's filter selections into the other. Saved on every interaction;
+// restored on page load and on switching back to a project. Search is
+// deliberately excluded — see the comment by the search listener above.
+function uiPrefsKey() {
+  return 'rasic_prefs_' + App.state.activeProjectId;
+}
+
+function saveUIPrefs() {
+  try {
+    const prefs = {
+      viewMode: App.state.viewMode,
+      dashboardActive: App.state.dashboardActive,
+      funcFilter: document.getElementById('funcFilter').value,
+      phaseFilter: document.getElementById('phaseFilter').value,
+      ownerFilter: document.getElementById('ownerFilter').value,
+      accountableFilter: document.getElementById('accountableFilter').value,
+      statusFilter: document.getElementById('statusFilter').value,
+      priorityFilter: document.getElementById('priorityFilter').value,
+    };
+    localStorage.setItem(uiPrefsKey(), JSON.stringify(prefs));
+  } catch (e) { console.warn('[PREFS] save failed:', e); }
+}
+
+function loadUIPrefs() {
+  try {
+    const raw = localStorage.getItem(uiPrefsKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+// Applies saved prefs to App.state immediately, but the <select> dropdowns
+// themselves can't be set yet — their <option> lists don't exist until
+// renderAll() rebuilds them from loaded task data, and setting .value
+// before a matching <option> exists is silently ignored by the browser.
+// So the dropdown values are queued in App.state._pendingPrefs and applied
+// by renderAll() the next time it rebuilds those options (see renderAll()).
+// Returns true if there was anything to restore.
+function applyUIPrefs(prefs) {
+  if (!prefs) return false;
+  App.state.viewMode = prefs.viewMode === 'execution' ? 'execution' : 'planning';
+  App.state.dashboardActive = !!prefs.dashboardActive;
+  App.state._pendingPrefs = {
+    funcFilter: prefs.funcFilter || '',
+    phaseFilter: prefs.phaseFilter || '',
+    ownerFilter: prefs.ownerFilter || '',
+    accountableFilter: prefs.accountableFilter || '',
+    statusFilter: prefs.statusFilter || '',
+    priorityFilter: prefs.priorityFilter || '',
+  };
+  App.state.activeOwner = App.state._pendingPrefs.ownerFilter;
+  return true;
+}
+
 // ── PROJECT SWITCHER ──────────────────────────────────────────────────────────
-// Called by the project <select> in the header.  Persists the choice to
-// localStorage, resets all transient state, then triggers a full reload so
-// every URL-dependent subsystem (planning, master, milestones) picks up the
-// new project's URLs automatically.
+// Called by the project <select> in the header. Persists the choice to
+// localStorage, restores that project's own last-saved view/filter state if
+// one exists (falling back to a clean slate the first time a project is
+// ever opened), then triggers a full reload so every URL-dependent
+// subsystem (planning, master, milestones) picks up the new project's URLs.
 function switchProject(projectId) {
   if (!PROJECTS[projectId]) return;         // guard against stale option values
   if (projectId === App.state.activeProjectId) return; // no-op if already selected
@@ -2331,25 +2415,33 @@ function switchProject(projectId) {
   App.state.activeProjectId = projectId;
   localStorage.setItem(LS_KEY, projectId);
 
-  // Reset view state so the new project starts in a clean slate.
-  App.state.viewMode = 'planning';
-  App.state.dashboardActive = false;
-  App.state.activeOwner = '';
   App.state.collapsedGroups.clear();
   App.state.pvhFuncSort = null;
   App.state.taskMilestones.clear();
   App.state.zoomMode = 'overview';
   App.state.zoomMonth = null;
 
+  const restored = applyUIPrefs(loadUIPrefs());
+  if (!restored) {
+    App.state.viewMode = 'planning';
+    App.state.dashboardActive = false;
+    App.state.activeOwner = '';
+  }
+
   syncViewToggle();
   syncDashboardToggle();
   syncColumnPickerVisibility();
 
-  // Reset filter dropdowns.
-  ['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
+  // Reset filter dropdowns to blank ONLY when there was nothing to restore.
+  // When prefs WERE restored, leave the <select>s alone — renderAll() will
+  // apply the queued App.state._pendingPrefs once it rebuilds each
+  // dropdown's <option> list from the new project's loaded data.
+  if (!restored) {
+    ['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
 
   // Full data reload from the new project's sheets.
   loadData();
@@ -2713,6 +2805,7 @@ function filterByOwner(name) {
   App.state.activeOwner = (App.state.activeOwner === name) ? '' : name;
   const sel = document.getElementById('ownerFilter');
   if (sel) sel.value = App.state.activeOwner;
+  saveUIPrefs();
   // Route through renderAll so execution view, planning view, and dashboard
   // all respond correctly regardless of which mode is currently active.
   if (App.state.dashboardActive) renderDashboard();
@@ -2730,6 +2823,7 @@ function filterByFunctionQuick(name) {
   const sel = document.getElementById('funcFilter');
   if (!sel) return;
   sel.value = (sel.value === name) ? '' : name;
+  saveUIPrefs();
   if (App.state.dashboardActive) renderDashboard();
   else renderAll();
 }
@@ -2783,10 +2877,22 @@ function renderAll() {
   const accountableSel = document.getElementById('accountableFilter');
   const statusSel = document.getElementById('statusFilter');
   const prioritySel = document.getElementById('priorityFilter');
-  const savedFunc = funcSel.value, savedOwner = ownerSel.value;
-  const savedAccountable = accountableSel ? accountableSel.value : '';
-  const savedStatus = statusSel ? statusSel.value : '';
-  const savedPriority = prioritySel ? prioritySel.value : '';
+  // A restored project switch / page load queues desired values here (see
+  // applyUIPrefs()) — option lists didn't exist yet when those were set, so
+  // they couldn't be applied to the <select>s directly. Once, right here,
+  // is where they actually get applied — after the option lists below are
+  // rebuilt from real data. Normal renders (no pending restore) just keep
+  // whatever's already selected, exactly as before.
+  const pending = App.state._pendingPrefs;
+  const savedFunc = pending ? pending.funcFilter : funcSel.value;
+  const savedOwner = pending ? pending.ownerFilter : ownerSel.value;
+  const savedAccountable = pending ? pending.accountableFilter : (accountableSel ? accountableSel.value : '');
+  const savedStatus = pending ? pending.statusFilter : (statusSel ? statusSel.value : '');
+  const savedPriority = pending ? pending.priorityFilter : (prioritySel ? prioritySel.value : '');
+  if (pending) {
+    const phaseSel = document.getElementById('phaseFilter');
+    if (phaseSel) phaseSel.value = pending.phaseFilter; // static options, safe to set directly
+  }
   funcSel.innerHTML  = '<option value="">all functions</option>'  + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
   ownerSel.innerHTML = `<option value="">${App.state.viewMode === 'execution' ? 'all responsible' : 'all owners'}</option>` + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
   if (accountableSel) {
@@ -2801,6 +2907,8 @@ function renderAll() {
     prioritySel.style.display = App.state.viewMode === 'execution' ? '' : 'none';
     prioritySel.innerHTML = '<option value="">all priority</option>' + priorities.map(p=>`<option value="${p}"${p===savedPriority?' selected':''}>${p}</option>`).join('');
   }
+  App.state.activeOwner = ownerSel.value; // keep in sync whichever path set it
+  App.state._pendingPrefs = null; // consumed — subsequent renders behave normally
   applyDashboardVisibility();
   if (App.state.dashboardActive) renderDashboard();
   else if (proj().customTable) renderCustomColumnsTable();
@@ -2817,6 +2925,30 @@ function escapeHTML(value) {
     '"': '&quot;',
     "'": '&#39;',
   }[ch]));
+}
+
+// ── Global activity search ──────────────────────────────────────────────
+// Checks Activity, Function, Owner/Responsible, Accountable, and any
+// project-specific extra field (Part Name, Supply Model, Dependency, ...)
+// so it genuinely works as a "find anything" search across whatever
+// columns a given project happens to have, not just the Activity text.
+function taskMatchesSearch(t, term) {
+  if (!term) return true;
+  const q = term.toLowerCase();
+  if ((t.activity || '').toLowerCase().includes(q)) return true;
+  if ((t.func || '').toLowerCase().includes(q)) return true;
+  if ((t.owner || t.responsible || '').toLowerCase().includes(q)) return true;
+  if ((t.accountable || '').toLowerCase().includes(q)) return true;
+  if (t._extra) {
+    for (const v of Object.values(t._extra)) {
+      if (v && String(v).toLowerCase().includes(q)) return true;
+    }
+  }
+  return false;
+}
+function getSearchTerm() {
+  const el = document.getElementById('globalSearch');
+  return el ? el.value.trim() : '';
 }
 
 function parseLocalDate(s) {
@@ -2842,6 +2974,7 @@ function renderExecutionTable() {
   const selAccountable = document.getElementById('accountableFilter').value;
   const selStatus = document.getElementById('statusFilter').value;
   const selPriority = document.getElementById('priorityFilter').value;
+  const searchTerm = getSearchTerm();
   if (selResponsible !== App.state.activeOwner) App.state.activeOwner = selResponsible;
 
   let tasks = App.state.executionTasks.filter(t => {
@@ -2851,6 +2984,7 @@ function renderExecutionTable() {
     if (selAccountable && t.accountable !== selAccountable) return false;
     if (selStatus && t.executionStatus !== selStatus) return false;
     if (selPriority && t.priority !== selPriority) return false;
+    if (searchTerm && !taskMatchesSearch(t, searchTerm)) return false;
     return true;
   }).map(t => {
     const execStart = t.startDate || t.start;
@@ -3038,7 +3172,7 @@ function renderExecutionTable() {
   let html = `<table style="min-width:1450px">
   <thead>
     <tr>
-      ${cols.map(c => `<th class="${c.extra ? 'extra-col-th' : ''}" style="min-width:${c.minWidth||80}px" ${c.extra?'title="Project-specific field"':''}>${escapeHTML(c.label)}</th>`).join('')}
+      ${cols.map(c => `<th class="${c.extra ? 'extra-col-th' : ''}${c.key === 'activity' ? ' col-sticky-activity' : ''}" style="min-width:${c.minWidth||80}px" ${c.extra?'title="Project-specific field"':''}>${escapeHTML(c.label)}</th>`).join('')}
       <th style="min-width:${App.state.zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
@@ -3299,6 +3433,7 @@ function renderCustomColumnsTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
+  const searchTerm = getSearchTerm();
   if (selOwner !== App.state.activeOwner) App.state.activeOwner = selOwner;
 
   let tasks = App.state.executionTasks.filter(t => {
@@ -3306,6 +3441,7 @@ function renderCustomColumnsTable() {
     if (selPhase && t.phase !== selPhase) return false;
     const owner = t.responsible || t.owner;
     if (App.state.activeOwner && owner !== App.state.activeOwner) return false;
+    if (searchTerm && !taskMatchesSearch(t, searchTerm)) return false;
     return true;
   }).map(t => {
     const execStart = t.startDate || t.start;
@@ -3429,11 +3565,12 @@ function renderCustomColumnsTable() {
   <thead>
     <tr>
       ${cols.map(c => {
+        const stickyClass = c.key === 'activity' ? 'col-sticky-activity' : c.key === 'function' ? 'col-sticky-function' : '';
         if (c.key === 'function' && isFlatRows) {
           const arrow = App.state.pvhFuncSort === 'asc' ? ' ▲' : App.state.pvhFuncSort === 'desc' ? ' ▼' : '';
-          return `<th style="min-width:${c.minWidth||80}px;cursor:pointer;user-select:none" data-action="sort-function-col" title="Click to sort by Function within each Part (does not change grouping)">${escapeHTML(c.label)}${arrow}</th>`;
+          return `<th class="${stickyClass}" style="min-width:${c.minWidth||80}px;cursor:pointer;user-select:none" data-action="sort-function-col" title="Click to sort by Function within each Part (does not change grouping)">${escapeHTML(c.label)}${arrow}</th>`;
         }
-        return `<th style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`;
+        return `<th class="${stickyClass}" style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`;
       }).join('')}
       <th style="min-width:${App.state.zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${ticksHTML}</th>
     </tr>
@@ -3478,7 +3615,7 @@ function renderCustomColumnsTable() {
       }
       if (c.key === 'function') {
         const isActiveFunc = val && val === selFunc ? ' active-owner' : '';
-        return `<td>${val?`<span class="owner-pill${isActiveFunc}" data-action="filter-function-quick" data-func="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
+        return `<td class="col-sticky-function">${val?`<span class="owner-pill${isActiveFunc}" data-action="filter-function-quick" data-func="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
       }
       if (c.key === 'responsible') {
         const isActive = val && val === App.state.activeOwner ? ' active-owner' : '';
@@ -3612,6 +3749,7 @@ function renderTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
+  const searchTerm = getSearchTerm();
   // Keep App.state.activeOwner in sync with dropdown
   if (selOwner !== App.state.activeOwner) App.state.activeOwner = selOwner;
 
@@ -3619,6 +3757,7 @@ function renderTable() {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
     if (App.state.activeOwner && t.owner !== App.state.activeOwner) return false;
+    if (searchTerm && !taskMatchesSearch(t, searchTerm)) return false;
     return true;
   });
   // Compute RAG once per task
@@ -3798,7 +3937,7 @@ function renderTable() {
   let html = `<table>
   <thead>
     <tr>
-      <th style="min-width:200px">activity</th>
+      <th class="col-sticky-activity" style="min-width:200px">activity</th>
       <th style="min-width:72px">owner</th>
       <th style="min-width:58px">phase</th>
       <th style="min-width:68px">start</th>
@@ -3955,13 +4094,27 @@ function drillBack()       { App.state.zoomMode = 'overview'; App.state.zoomMont
 // Wire filters
 ['funcFilter','phaseFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
+    saveUIPrefs();
     if (App.state.dashboardActive) renderDashboard(); else renderAll();
   });
 });
 // ownerFilter: sync App.state.activeOwner state AND re-render in one listener (not two).
 document.getElementById('ownerFilter').addEventListener('change', function() {
   App.state.activeOwner = this.value;
+  saveUIPrefs();
   if (App.state.dashboardActive) renderDashboard(); else renderAll();
+});
+
+// Global activity search — debounced so fast typing doesn't re-render on
+// every keystroke. Deliberately NOT persisted to localStorage (unlike the
+// dropdown filters/view state below) — an old search term silently
+// hiding rows after a refresh would be more confusing than convenient.
+let _searchDebounceTimer = null;
+document.getElementById('globalSearch').addEventListener('input', () => {
+  clearTimeout(_searchDebounceTimer);
+  _searchDebounceTimer = setTimeout(() => {
+    if (App.state.dashboardActive) renderDashboard(); else renderAll();
+  }, 120);
 });
 
 // ── Task Detail Drawer ────────────────────────────────────────────────────────
@@ -4283,6 +4436,9 @@ function renderDashboard() {
       breaches.push({ task: t, reasons });
     }
   });
+  const BREACH_CAP = 30;
+  const breachesShown = breaches.slice(0, BREACH_CAP);
+  const breachesHidden = breaches.length - breachesShown.length;
 
   // Bottleneck by Function — rank by Overdue + At Risk volume
   const funcMap = new Map();
@@ -4297,8 +4453,10 @@ function renderDashboard() {
   });
   const bottlenecks = [...funcMap.values()]
     .filter(e => (e.red + e.amber) > 0)
-    .sort((a,b) => (b.red + b.amber) - (a.red + a.amber))
-    .slice(0, 8);
+    .sort((a,b) => (b.red + b.amber) - (a.red + a.amber));
+  const BOTTLENECK_CAP = 15;
+  const bottlenecksShown = bottlenecks.slice(0, BOTTLENECK_CAP);
+  const bottlenecksHidden = bottlenecks.length - bottlenecksShown.length;
 
   // Resource Accountability Matrix — owners ranked by uncompleted backlog
   const ownerMap = new Map();
@@ -4313,8 +4471,11 @@ function renderDashboard() {
     else if (t._rag === 'amber') entry.amber++;
     else entry.grey++;
   });
-  const ownerRanking = [...ownerMap.values()].sort((a,b) => b.total - a.total).slice(0, 8);
-  const maxOwnerTotal = ownerRanking.length ? ownerRanking[0].total : 1;
+  const ownerRanking = [...ownerMap.values()].sort((a,b) => b.total - a.total);
+  const OWNER_RANK_CAP = 15;
+  const ownerRankingShown = ownerRanking.slice(0, OWNER_RANK_CAP);
+  const ownerRankingHidden = ownerRanking.length - ownerRankingShown.length;
+  const maxOwnerTotal = ownerRankingShown.length ? ownerRankingShown[0].total : 1;
 
   // ── Section C: Forward-Looking Gate Risks ───────────────────────────────
   const upcomingMilestones = getMilestones()
@@ -4420,19 +4581,19 @@ function renderDashboard() {
     <div class="dash-grid dash-row-b">
       <div class="dash-card">
         <div class="dash-card-title">Threshold Breaker Alerts <span style="color:var(--rag-red)">${breaches.length}</span></div>
-        ${breaches.length ? `<div class="breach-list">${breaches.slice(0, 12).map(b => `
+        ${breaches.length ? `<div class="breach-list">${breachesShown.map(b => `
           <div class="breach-item">
             <div>
               <div class="breach-item-name">${escapeHTML(b.task.activity)}</div>
               <div class="breach-item-meta">${escapeHTML(b.task.func || '')}${(isExec ? b.task.responsible : b.task.owner) ? ' · ' + escapeHTML(isExec ? b.task.responsible : b.task.owner) : ''}</div>
             </div>
             <span class="breach-tag">${b.reasons.map(escapeHTML).join(' · ')}</span>
-          </div>`).join('')}</div>`
+          </div>`).join('')}${breachesHidden > 0 ? `<div class="dash-more-note">+ ${breachesHidden} more breach${breachesHidden===1?'':'es'} not shown — refine filters to narrow the list</div>` : ''}</div>`
           : `<div class="dash-empty">No threshold breaches in the filtered dataset.</div>`}
       </div>
       <div class="dash-card">
         <div class="dash-card-title">Bottleneck by Function</div>
-        ${bottlenecks.length ? `<div class="rank-list">${bottlenecks.map((b,i) => `
+        ${bottlenecks.length ? `<div class="rank-list">${bottlenecksShown.map((b,i) => `
           <div class="rank-row">
             <div class="rank-pos">${i+1}</div>
             <div class="rank-name">${escapeHTML(b.func)}</div>
@@ -4442,12 +4603,12 @@ function renderDashboard() {
               <div class="rank-bar-seg grey" style="width:${(b.grey/b.total*100).toFixed(1)}%"></div>
             </div>
             <div class="rank-counts">${b.red} overdue · ${b.amber} at risk</div>
-          </div>`).join('')}</div>`
+          </div>`).join('')}${bottlenecksHidden > 0 ? `<div class="dash-more-note">+ ${bottlenecksHidden} more function${bottlenecksHidden===1?'':'s'} not shown</div>` : ''}</div>`
           : `<div class="dash-empty">No functions currently have overdue or at-risk items.</div>`}
       </div>
       <div class="dash-card">
         <div class="dash-card-title">Resource Accountability Matrix</div>
-        ${ownerRanking.length ? `<div class="rank-list">${ownerRanking.map((o,i) => `
+        ${ownerRanking.length ? `<div class="rank-list">${ownerRankingShown.map((o,i) => `
           <div class="rank-row">
             <div class="rank-pos">${i+1}</div>
             <div class="rank-name">${escapeHTML(o.owner)}</div>
@@ -4457,7 +4618,7 @@ function renderDashboard() {
               <div class="rank-bar-seg grey" style="width:${(o.grey/maxOwnerTotal*100).toFixed(1)}%"></div>
             </div>
             <div class="rank-counts">${o.total} open tasks</div>
-          </div>`).join('')}</div>`
+          </div>`).join('')}${ownerRankingHidden > 0 ? `<div class="dash-more-note">+ ${ownerRankingHidden} more owner${ownerRankingHidden===1?'':'s'} not shown</div>` : ''}</div>`
           : `<div class="dash-empty">No owners with outstanding tasks in the filtered dataset.</div>`}
       </div>
     </div>
@@ -4570,9 +4731,10 @@ function buildReportDocument() {
     fill: #111827 !important;
   }
   .dash-card-title, .dash-section-label, .kpi-lbl, .stat-lbl,
-  .breach-item-meta, .gate-date, .report-print-sub, .rank-counts {
+  .breach-item-meta, .gate-date, .report-print-sub, .rank-counts, .dash-more-note {
     color: #6b7280 !important;
   }
+  .dash-more-note { border-top-color: #e5e7eb !important; }
   .dash-section-label::after { background: #e5e7eb !important; }
 
   /* ── Color standardization (neon -> print-safe solids) ── */
@@ -4727,6 +4889,14 @@ function downloadDashboardReport() {
 
 setInterval(loadData, 5 * 60 * 1000);
 
+// Restore this project's last-saved view/filter state (Feature: persistent
+// filter & view preferences) before the very first load — same restore
+// path switchProject() uses, so initial load and project-switch behave
+// identically. If nothing was ever saved, App.state stays at its defaults
+// and the app starts exactly as it always has.
+applyUIPrefs(loadUIPrefs());
+syncViewToggle();
+syncDashboardToggle();
 syncColumnPickerVisibility();
 loadData();
 renderMilestoneList();
