@@ -1018,7 +1018,7 @@ td {
 tr.task-row { cursor: pointer; }
 tr.task-row:hover td { background: rgba(99,102,241,0.07); }
 
-/* ── PVH Part-level group header — compact, single-line, mirrors 's
+/* ── PVH Part-level group header — compact, single-line, mirrors Array's
    own .section-row styling rather than a rich metadata block. ──────────── */
 tr.section-group-part td {
   background: rgba(28,33,50,0.75);
@@ -1538,6 +1538,31 @@ function syncExecutionTasks() {
     unmatchedMaster,
   };
   console.log('[EXECUTION] Merge stats:', executionMergeStats);
+
+  // ── DIAGNOSTIC ONLY — does not alter parsing, merging, or rendering ────────
+  // Flags any merged execution date that falls outside a sane project window
+  // (2023–2030). Used to trace corrupted dates (e.g. a non-date column
+  // misread as an Excel serial number by fixDate()) without changing any
+  // parser/merge/render behaviour. Safe to remove once the root cause is
+  // confirmed and fixed at the source.
+  const SANITY_MIN_YEAR = 2023, SANITY_MAX_YEAR = 2030;
+  const suspicious = [];
+  executionTasks.forEach(t => {
+    ['startDate', 'plannedEndDate', 'revisedEndDate', 'actualEndDate'].forEach(f => {
+      const raw = t[f];
+      if (!raw) return;
+      const d = parseLocalDate(raw);
+      if (d && (d.getFullYear() < SANITY_MIN_YEAR || d.getFullYear() > SANITY_MAX_YEAR)) {
+        suspicious.push({ activity: t.activity, func: t.func, field: f, rawValue: raw, parsedYear: d.getFullYear() });
+      }
+    });
+  });
+  if (suspicious.length) {
+    console.warn(`[EXECUTION] ${suspicious.length} suspicious date(s) outside ${SANITY_MIN_YEAR}-${SANITY_MAX_YEAR} — likely corrupted by fixDate():`);
+    console.table(suspicious);
+  } else {
+    console.log('[EXECUTION] Date sanity check passed — all execution dates within expected range.');
+  }
 }
 
 // ── ROBUST CSV PARSER (handles quoted fields with commas inside) ───────────────
