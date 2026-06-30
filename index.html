@@ -1731,11 +1731,20 @@ function parseCSV(text) {
     .map((h, i) => ({ i, label: rawHeaders[i] ? rawHeaders[i].replace(/"/g,'').trim() : h }))
     .filter(({i}) => !coreColSet.has(i) && headers[i]); // skip claimed + blank headers
 
-  let skippedNoActivity = 0, skippedNoDate = 0, firstSkippedDateSample = null;
+  // ── Row counters for the debug summary printed at the end ──────────────────
+  // Per the requirement: ONLY a genuinely blank activity should cause a row
+  // to be dropped. A missing or unparseable date is recorded as a stat, but
+  // the row is still kept — Gantt bars simply aren't drawn for it (handled
+  // downstream by every renderer, all of which already null-check dates).
+  let skippedBlankActivity = 0;
+  let tasksWithoutDates = 0;
+  let totalDataLines = 0;
+  let blankLineCount = 0;
 
   for (let i = headerIdx + 1; i < rawLines.length; i++) {
     const line = rawLines[i];
-    if (!line.trim()) continue;
+    if (!line.trim()) { blankLineCount++; continue; }
+    totalDataLines++;
     const cells = parseCSVLine(line);
 
     // Always update phase and function carry-forward, even for rows without activity
@@ -1755,16 +1764,17 @@ function parseCSV(text) {
     }
 
     const activity = actCol >= 0 ? (cells[actCol] || '').trim() : '';
-    if (!activity) { skippedNoActivity++; continue; }
+    // The ONLY reason a row is ever discarded: it has no activity text at
+    // all (a true separator/blank row). Everything else — missing dates,
+    // missing owner, missing status — is preserved on the task object.
+    if (!activity) { skippedBlankActivity++; continue; }
 
     const rawStart = startCol >= 0 ? (cells[startCol] || '') : '';
-    const start = fixDate(rawStart);
-    if (!start) {
-      skippedNoDate++;
-      if (!firstSkippedDateSample) firstSkippedDateSample = { activity, rawStart, allCells: cells };
-      continue;
-    }
-    const end = fixDate(endCol >= 0 ? (cells[endCol] || '') : '') || start;
+    const rawEnd   = endCol   >= 0 ? (cells[endCol]   || '') : '';
+    let start = fixDate(rawStart);
+    let end   = fixDate(rawEnd) || start;
+    if (!start && end) start = end; // mirror whichever single date IS present
+    if (!start) tasksWithoutDates++; // stat only — row is kept either way
 
     // Sanitise owner — reject if it looks like a date
     let rawOwner = ownerCol >= 0 ? (cells[ownerCol] || '').trim() : '';
@@ -1808,10 +1818,15 @@ function parseCSV(text) {
       _extra,
     });
   }
-  console.log(`[RASIC] Parsed ${tasks.length} tasks | skipped no-activity: ${skippedNoActivity} | skipped no-date: ${skippedNoDate}`);
-  if (firstSkippedDateSample) {
-    console.warn('[RASIC] First row skipped due to unparseable date:', firstSkippedDateSample);
-  }
+  console.log(
+    `[RASIC] ── Parse summary ──\n` +
+    `  Spreadsheet data rows : ${totalDataLines + blankLineCount}\n` +
+    `  Blank separator lines : ${blankLineCount}\n` +
+    `  Parsed activities     : ${tasks.length}\n` +
+    `  Skipped (no activity) : ${skippedBlankActivity}\n` +
+    `  Activities w/o dates  : ${tasksWithoutDates} (kept — no Gantt bar drawn, all other fields intact)\n` +
+    `  Sanity check          : ${tasks.length + skippedBlankActivity === totalDataLines ? 'OK — parsed + skipped == data rows' : 'MISMATCH — investigate'}`
+  );
   return tasks.length ? tasks : null;
 }
 
@@ -2919,23 +2934,29 @@ function renderExecutionTable() {
         node.children.forEach(t => {
           const sDate = parseLocalDate(t._execStart);
           const eDate = parseLocalDate(t._execEnd);
-          if (!sDate || !eDate) return;
+          // No early return: a task with no parseable date is still a real
+          // activity row and must be rendered — it simply gets no Gantt bar.
+          const hasDates = !!(sDate && eDate);
 
-          const plannedRaw = parseLocalDate(t._plannedEnd) || eDate;
-          const plannedDisplayEnd = plannedRaw > eDate ? eDate : plannedRaw;
-          const totalSeg = segmentMetrics(sDate, eDate);
-          const plannedSeg = segmentMetrics(sDate, plannedDisplayEnd);
-          const extensionSeg = plannedRaw < eDate ? segmentMetrics(plannedRaw, eDate) : null;
-          if (!totalSeg || !plannedSeg) return;
+          let plannedSeg = null, extensionSeg = null, totalSeg = null, progressHTML = '', taskDiamond = '';
+          if (hasDates) {
+            const plannedRaw = parseLocalDate(t._plannedEnd) || eDate;
+            const plannedDisplayEnd = plannedRaw > eDate ? eDate : plannedRaw;
+            totalSeg = segmentMetrics(sDate, eDate);
+            plannedSeg = segmentMetrics(sDate, plannedDisplayEnd);
+            extensionSeg = plannedRaw < eDate ? segmentMetrics(plannedRaw, eDate) : null;
+          }
 
           const rag = t._rag;
           const color = ragColor(rag);
           const rClass = ragClass(rag);
-          const progress = Number(t.progressPct);
-          const progressPct = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
-          const progressHTML = progressPct > 0
-            ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
-            : '';
+          if (hasDates && totalSeg) {
+            const progress = Number(t.progressPct);
+            const progressPct = Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0;
+            progressHTML = progressPct > 0
+              ? `<div style="position:absolute;left:${totalSeg.left.toFixed(2)}%;width:${(totalSeg.width * progressPct / 100).toFixed(2)}%;top:4px;bottom:4px;background:rgba(255,255,255,0.24);border-radius:2px;z-index:5;pointer-events:none"></div>`
+              : '';
+          }
 
           const gridLines = majorTicks.map(tk =>
             `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
@@ -2953,21 +2974,27 @@ function renderExecutionTable() {
           const responsibleActive = t.responsible && t.responsible === activeOwner ? ' active-owner' : '';
           const msKey = `${t.func}::${t.activity}`;
           const isTaskMs = taskMilestones.has(msKey);
-          const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
-          const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
-            data-ms-type="diamond"
-            data-ms-label="${escapeHTML(t.activity)}"
-            data-ms-date="${t._execEnd}"
-            data-ms-owner="${escapeHTML(t.responsible || '-')}"
-            data-ms-start="${t._execStart}"
-            data-ms-rag="${rag}"
-            data-ms-rag-label="${ragLabel}"></div>`;
+          if (hasDates) {
+            const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
+            taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+              data-ms-type="diamond"
+              data-ms-label="${escapeHTML(t.activity)}"
+              data-ms-date="${t._execEnd}"
+              data-ms-owner="${escapeHTML(t.responsible || '-')}"
+              data-ms-start="${t._execStart}"
+              data-ms-rag="${rag}"
+              data-ms-rag-label="${ragLabel}"></div>`;
+          }
 
           const execExtraCells = execExtraNames.map(n =>
             `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
           ).join('');
 
           const execTaskIdx = _lastRenderedTasks.indexOf(t);
+          const barFillHTML = (hasDates && plannedSeg)
+            ? `<div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
+               ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}`
+            : '';
           out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${execTaskIdx}">
             <td class="activity-cell">
               <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
@@ -2986,8 +3013,7 @@ function renderExecutionTable() {
               <div class="bar-outer">
                 ${gridLines}
                 ${mLines}
-                <div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
-                ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}
+                ${barFillHTML}
                 ${progressHTML}
                 ${todayLine}
                 ${taskDiamond}
@@ -3645,12 +3671,9 @@ function renderTable() {
         node.children.forEach(t => {
           const sDate = parseLocal(t.start);
           const eDate = parseLocal(t.end);
-          if (!sDate || !eDate) return;
-          const clampedStart = sDate < minD ? minD : sDate;
-          const clampedEnd   = eDate > maxD ? maxD : eDate;
-          const left  = pctOf(clampedStart);
-          const right = pctOf(clampedEnd);
-          const w     = Math.max(0.6, right - left);
+          // No early return: keep the row even if the date is missing or
+          // unparseable — only the Gantt bar segment is conditional.
+          const hasDates = !!(sDate && eDate);
 
           const rag    = t._rag;
           const color  = ragColor(rag);
@@ -3670,16 +3693,26 @@ function renderTable() {
           const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
           const msKey = `${t.func}::${t.activity}`;
           const isTaskMs = taskMilestones.has(msKey);
-          const endPct = pctOf(clampedEnd);
           const ragLabel = {red:'Overdue',amber:'At Risk',green:'Done',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
-          const taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
-            data-ms-type="diamond"
-            data-ms-label="${t.activity.replace(/"/g,'&quot;')}"
-            data-ms-date="${t.end}"
-            data-ms-owner="${(t.owner||'—').replace(/"/g,'&quot;')}"
-            data-ms-start="${t.start}"
-            data-ms-rag="${rag}"
-            data-ms-rag-label="${ragLabel}"></div>`;
+
+          let barFillHTML = '', taskDiamond = '';
+          if (hasDates) {
+            const clampedStart = sDate < minD ? minD : sDate;
+            const clampedEnd   = eDate > maxD ? maxD : eDate;
+            const left  = pctOf(clampedStart);
+            const right = pctOf(clampedEnd);
+            const w     = Math.max(0.6, right - left);
+            barFillHTML = `<div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>`;
+            const endPct = pctOf(clampedEnd);
+            taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
+              data-ms-type="diamond"
+              data-ms-label="${t.activity.replace(/"/g,'&quot;')}"
+              data-ms-date="${t.end}"
+              data-ms-owner="${(t.owner||'—').replace(/"/g,'&quot;')}"
+              data-ms-start="${t.start}"
+              data-ms-rag="${rag}"
+              data-ms-rag-label="${ragLabel}"></div>`;
+          }
 
           const extraCells = extraFieldNames.map(n =>
             `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
@@ -3700,7 +3733,7 @@ function renderTable() {
               <div class="bar-outer">
                 ${gridLines}
                 ${mLines}
-                <div class="bar-fill ${rClass}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;background:${color};opacity:0.88" title="${tip}"></div>
+                ${barFillHTML}
                 ${todayLine}
                 ${taskDiamond}
               </div>
