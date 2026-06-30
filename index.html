@@ -1182,21 +1182,27 @@ const PROJECTS = {
 
   pvh: {
     name: 'PVH',
-    grouping: ['partName', 'function'],
+    // Single-level grouping by Part only — Function is NOT a grouping level
+    // for PVH, it is rendered as a plain column (mirrors the source sheet).
+    grouping: ['partName'],
+    // flatRows: tells renderCustomColumnsTable to preserve the exact sheet
+    // row sequence within each Part block (no sorting, no sub-grouping).
+    flatRows: true,
+    // Part Name + Supply Model are NOT row columns — they're shown once in
+    // the Part header (handled separately from this list).
     columns: [
-      { key: 'partName',    label: 'Part Name',        minWidth: 110 },
-      { key: 'supplyModel', label: 'Supply Model',     minWidth: 100 },
-      { key: 'function',    label: 'Function',         minWidth: 90  },
-      { key: 'activity',    label: 'Activity',         minWidth: 200 },
-      { key: 'responsible', label: 'Responsible',      minWidth: 90  },
-      { key: 'accountable', label: 'Accountable',      minWidth: 90  },
+      { key: 'function',    label: 'Function',         minWidth: 110 },
+      { key: 'activity',    label: 'Activity',         minWidth: 220 },
+      { key: 'responsible', label: 'Responsible',      minWidth: 100 },
+      { key: 'accountable', label: 'Accountable',      minWidth: 110 },
       { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
       { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
       { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
-      { key: 'plannedEnd',  label: 'Planned End Date', minWidth: 100, isDate: true },
+      { key: 'plannedEnd',  label: 'Planned End',      minWidth: 100, isDate: true },
       { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
       { key: 'aging',       label: 'Aging',            minWidth: 60  },
       { key: 'status',      label: 'Status',           minWidth: 90  },
+      { key: 'dependency',  label: 'Dependency',       minWidth: 130 },
     ],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',
     master:     '',
@@ -1586,6 +1592,11 @@ function parseCSV(text) {
   const tasks = [];
   let currentFunc = '';
   let currentPhase = 'Phase 1';
+  // Carry-forward state for merged-cell-style columns (e.g. PVH's Part Name /
+  // Supply Model, which Excel/Sheets export as blank on every row after the
+  // first within a merged block — mirrors the existing phase/func pattern).
+  let currentPartName = '';
+  let currentSupplyModel = '';
 
   // Normalise a header cell for matching
   const norm = s => s.replace(/"/g,'').trim().toLowerCase().replace(/[\s\-_\/]+/g,' ');
@@ -1638,6 +1649,10 @@ function parseCSV(text) {
   const ownerCol  = col('responsible', 'owner', 'r name', 'r - name', 'accountable', 'assigned to', 'assignee', 'person', 'name');
   const statusCol = col('status', 'progress', 'state', 'completion');
   const priorityCol = col('priority');
+  // PVH-style merged-cell columns — optional; -1 (not found) for projects
+  // like Array that don't have them, with zero effect on behaviour.
+  const partNameCol    = col('part name', 'part no', 'part');
+  const supplyModelCol = col('supply model', 'supply');
 
   console.log('[RASIC] Column indices — phase:', phaseCol, 'func:', funcCol, 'act:', actCol, 'start:', startCol, 'end:', endCol, 'owner:', ownerCol, 'status:', statusCol);
   // Guard: if we can't find activity column or at least one date column, bail out clearly
@@ -1666,6 +1681,16 @@ function parseCSV(text) {
     const rowFunc  = funcCol  >= 0 ? (cells[funcCol]  || '').trim() : '';
     if (rowPhase && (rowPhase.toLowerCase().includes('phase'))) currentPhase = rowPhase;
     if (rowFunc)  currentFunc = rowFunc;
+
+    // Carry-forward for merged-cell columns (Part Name / Supply Model)
+    if (partNameCol >= 0) {
+      const rawPart = (cells[partNameCol] || '').trim();
+      if (rawPart) currentPartName = rawPart;
+    }
+    if (supplyModelCol >= 0) {
+      const rawSupply = (cells[supplyModelCol] || '').trim();
+      if (rawSupply) currentSupplyModel = rawSupply;
+    }
 
     const activity = actCol >= 0 ? (cells[actCol] || '').trim() : '';
     if (!activity) { skippedNoActivity++; continue; }
@@ -1698,6 +1723,16 @@ function parseCSV(text) {
       const v = (cells[ci] || '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
       if (v) _extra[label] = v;
     });
+    // Apply carried-forward values for merged-cell columns (overrides any
+    // blank cell that was just captured above with the last non-blank value).
+    if (partNameCol >= 0 && currentPartName) {
+      const label = extraFieldDefs.find(d => d.i === partNameCol)?.label;
+      if (label) _extra[label] = currentPartName;
+    }
+    if (supplyModelCol >= 0 && currentSupplyModel) {
+      const label = extraFieldDefs.find(d => d.i === supplyModelCol)?.label;
+      if (label) _extra[label] = currentSupplyModel;
+    }
 
     tasks.push({
       phase:    rowPhase || currentPhase,
@@ -2778,7 +2813,12 @@ function resolveColumnValue(task, key) {
     remark:      () => task.remark,
     remarks:     () => task.remark,
   };
-  if (coreMap[nk]) return coreMap[nk]() || '';
+  // Try the core field first, but only return it if non-empty — an empty
+  // core value (common when a project has no master sheet, e.g. PVH) must
+  // fall through to the _extra lookup below rather than short-circuiting
+  // with a blank string.
+  const coreVal = coreMap[nk] ? coreMap[nk]() : '';
+  if (coreVal) return coreVal;
   if (task._extra) {
     const keys = Object.keys(task._extra);
     const match = keys.find(k => norm(k) === nk)
@@ -2898,11 +2938,32 @@ function renderCustomColumnsTable() {
     </div>`;
   }
 
-  // ── Grouping tree ──────────────────────────────────────────────────────────
+  // ── Grouping ──────────────────────────────────────────────────────────────
   const grouping = proj().grouping || ['function'];
-  const tree = buildGroupTree(tasks, grouping);
+  const isFlatRows = !!proj().flatRows;
   const excludedGrpKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
   const minTableWidth = cols.reduce((s, c) => s + (c.minWidth || 80), 0) + (zoomMode==='month'?620:460);
+
+  // flatRows mode (e.g. PVH): group by the single configured key (Part) using
+  // a SEQUENTIAL walk that creates a new block whenever the value changes —
+  // never a Map/Set bucket. This guarantees the original sheet row order is
+  // preserved exactly; nothing is sorted, merged, or re-grouped. No second
+  // grouping level is built — Function is rendered as a plain column.
+  function buildLinearGroups(taskList, key) {
+    const out = [];
+    let current = null;
+    taskList.forEach(t => {
+      const val = resolveGroupValue(t, key) || '(Unassigned)';
+      if (!current || current.name !== val) {
+        current = { name: val, path: val, tasks: [] };
+        out.push(current);
+      }
+      current.tasks.push(t);
+    });
+    return out;
+  }
+
+  const tree = isFlatRows ? buildLinearGroups(tasks, grouping[0]) : buildGroupTree(tasks, grouping);
 
   let html = `<table style="min-width:${minTableWidth}px">
   <thead>
@@ -2918,7 +2979,92 @@ function renderCustomColumnsTable() {
     return { left: pctOf(cs), width: Math.max(0.6, pctOf(ce) - pctOf(cs)) };
   };
 
-  // ── Recursive group row builder ─────────────────────────────────────────────
+  // Shared task-row builder — used by both the flat-rows renderer and the
+  // tree renderer's leaf level, so a single source of truth defines how a
+  // row looks for any project using the custom-columns engine.
+  function buildTaskRow(t, hidden) {
+    const rag   = t._rag;
+    const color = ragColor(rag);
+    const rClass = ragClass(rag);
+    const ragLbl = {red:'Overdue',amber:'At Risk',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || '';
+
+    const sDate = parseLocal(t._execStart);
+    const eDate = parseLocal(t._execEnd);
+    const gridLines = majorTicks.map(tk =>
+      `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
+    ).join('');
+    const todayLine = (todayPct>=0&&todayPct<=100)
+      ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
+      : '';
+    const seg = sDate && eDate ? segOf(sDate, eDate) : null;
+    const barHTML = seg
+      ? `<div class="bar-fill ${rClass}" style="left:${seg.left.toFixed(2)}%;width:${seg.width.toFixed(2)}%;background:${color};opacity:0.88" title="${escapeHTML(t.activity)} | ${fmt(t._execStart)} → ${fmt(t._execEnd)}"></div>`
+      : '';
+
+    const msKey = `${t.func}::${t.activity}`;
+    const isTaskMs = taskMilestones.has(msKey);
+    const taskIdx = _lastRenderedTasks.indexOf(t);
+
+    const cellsHTML = cols.map(c => {
+      const val = resolveColumnValue(t, c.key);
+      if (c.key === 'activity') {
+        return `<td class="activity-cell"><span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(val)}</td>`;
+      }
+      if (c.key === 'responsible') {
+        const isActive = val && val === activeOwner ? ' active-owner' : '';
+        return `<td>${val?`<span class="owner-pill${isActive}" data-action="filter-owner" data-owner="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
+      }
+      if (c.key === 'status') {
+        return `<td><span style="font-family:var(--mono);font-size:10px;color:${color};white-space:nowrap">${escapeHTML(val || ragLbl)}</span></td>`;
+      }
+      if (c.isDate) {
+        return `<td class="date-cell">${val?escapeHTML(fmt(val)):'<span style="color:var(--text3)">-</span>'}</td>`;
+      }
+      return `<td${val?'':' style="color:var(--text3)"'}>${val?escapeHTML(val):'-'}</td>`;
+    }).join('');
+
+    return `<tr class="task-row"${hidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
+      ${cellsHTML}
+      <td class="bar-col"><div class="bar-outer">${gridLines}${barHTML}${todayLine}</div></td>
+    </tr>`;
+  }
+
+  // ── Flat-rows group renderer (PVH): one header per Part, then every
+  // activity row directly underneath in exact original sheet order. No
+  // Function sub-header, no second grouping level, no sorting. ──────────────
+  function buildFlatPartGroups(groups) {
+    let out = '';
+    groups.forEach(node => {
+      const isCollapsed = collapsedGroups.has(node.path);
+      const rc2 = { red:0, amber:0, green:0 };
+      node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
+
+      // Part header — shows Part Name + Supply Model (and any other constant
+      // metadata) exactly once per block, plus activity/RAG counts.
+      const constMeta = getGroupConstantMeta(node.tasks, excludedGrpKeys);
+      const metaEntries = Object.entries(constMeta).slice(0, 4);
+      const chips = [
+        ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
+        `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
+        rc2.green ? `<span class="part-meta-chip part-meta-green"><span class="part-meta-key">Done:</span> ${rc2.green}</span>` : '',
+        rc2.amber ? `<span class="part-meta-chip part-meta-amber"><span class="part-meta-key">At Risk:</span> ${rc2.amber}</span>` : '',
+        rc2.red   ? `<span class="part-meta-chip part-meta-red"><span class="part-meta-key">Overdue:</span> ${rc2.red}</span>` : '',
+      ].filter(Boolean).join('');
+      out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}">
+        <td colspan="${colCount}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
+          <div class="group-part-header"><span class="section-toggle">${isCollapsed?'▶':'▼'}</span><span class="group-part-name">${escapeHTML(node.name)}</span></div>
+          <div class="group-part-meta">${chips}</div>
+        </td>
+      </tr>`;
+
+      // Activity rows — exact original sheet order, no sub-grouping.
+      node.tasks.forEach(t => { out += buildTaskRow(t, isCollapsed); });
+    });
+    return out;
+  }
+
+  // ── Tree group renderer — used for any future non-flat-rows project that
+  // opts into multi-level grouping with the custom-columns engine. ──────────
   function buildCustomGroupRows(nodes, isParentHidden) {
     let out = '';
     nodes.forEach(node => {
@@ -2928,7 +3074,6 @@ function renderCustomColumnsTable() {
       node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
 
       if (!node.isLeafGroup) {
-        // ── Part-level header ────────────────────────────────────────────────
         const constMeta = getGroupConstantMeta(node.tasks, excludedGrpKeys);
         const metaEntries = Object.entries(constMeta).slice(0, 4);
         const chips = [
@@ -2947,7 +3092,6 @@ function renderCustomColumnsTable() {
         out += buildCustomGroupRows(node.children, childrenHidden);
 
       } else {
-        // ── Function-level header ────────────────────────────────────────────
         const ragSummary = rc2.red
           ? `<span style="font-size:9px;color:var(--rag-red);font-family:var(--mono);margin-left:8px">▲ ${rc2.red} overdue</span>`
           : rc2.amber
@@ -2961,60 +3105,13 @@ function renderCustomColumnsTable() {
             ${escapeHTML(node.name)}${ragSummary}
           </td>
         </tr>`;
-
-        // ── Task rows ──────────────────────────────────────────────────────
-        node.children.forEach(t => {
-          const rag   = t._rag;
-          const color = ragColor(rag);
-          const rClass = ragClass(rag);
-          const ragLbl = {red:'Overdue',amber:'At Risk',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || '';
-
-          const sDate = parseLocal(t._execStart);
-          const eDate = parseLocal(t._execEnd);
-          const gridLines = majorTicks.map(tk =>
-            `<div style="position:absolute;top:0;bottom:0;left:${tk.p.toFixed(2)}%;width:1px;background:${tk.bold?'rgba(255,255,255,0.10)':'var(--border)'};pointer-events:none"></div>`
-          ).join('');
-          const todayLine = (todayPct>=0&&todayPct<=100)
-            ? `<div style="position:absolute;top:-3px;bottom:-3px;left:${todayPct.toFixed(2)}%;width:2px;background:var(--today);z-index:6;border-radius:1px;pointer-events:none"></div>`
-            : '';
-          const seg = sDate && eDate ? segOf(sDate, eDate) : null;
-          const barHTML = seg
-            ? `<div class="bar-fill ${rClass}" style="left:${seg.left.toFixed(2)}%;width:${seg.width.toFixed(2)}%;background:${color};opacity:0.88" title="${escapeHTML(t.activity)} | ${fmt(t._execStart)} → ${fmt(t._execEnd)}"></div>`
-            : '';
-
-          const msKey = `${t.func}::${t.activity}`;
-          const isTaskMs = taskMilestones.has(msKey);
-          const taskIdx = _lastRenderedTasks.indexOf(t);
-
-          const cellsHTML = cols.map(c => {
-            const val = resolveColumnValue(t, c.key);
-            if (c.key === 'activity') {
-              return `<td class="activity-cell"><span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(val)}</td>`;
-            }
-            if (c.key === 'responsible') {
-              const isActive = val && val === activeOwner ? ' active-owner' : '';
-              return `<td>${val?`<span class="owner-pill${isActive}" data-action="filter-owner" data-owner="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
-            }
-            if (c.key === 'status') {
-              return `<td><span style="font-family:var(--mono);font-size:10px;color:${color};white-space:nowrap">${escapeHTML(val || ragLbl)}</span></td>`;
-            }
-            if (c.isDate) {
-              return `<td class="date-cell">${val?escapeHTML(fmt(val)):'<span style="color:var(--text3)">-</span>'}</td>`;
-            }
-            return `<td${val?'':' style="color:var(--text3)"'}>${val?escapeHTML(val):'-'}</td>`;
-          }).join('');
-
-          out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
-            ${cellsHTML}
-            <td class="bar-col"><div class="bar-outer">${gridLines}${barHTML}${todayLine}</div></td>
-          </tr>`;
-        });
+        node.children.forEach(t => { out += buildTaskRow(t, childrenHidden); });
       }
     });
     return out;
   }
 
-  html += buildCustomGroupRows(tree, false);
+  html += isFlatRows ? buildFlatPartGroups(tree) : buildCustomGroupRows(tree, false);
   html += '</tbody></table>';
 
   const zoomEl = document.getElementById('zoom-bar');
