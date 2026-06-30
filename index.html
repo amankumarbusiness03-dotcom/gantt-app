@@ -1080,6 +1080,47 @@ tr.section-group-part td {
 tr.section-row.section-sublevel td {
   padding-left: 32px !important;
 }
+
+/* ── Column Picker (dynamic columns engine) ──────────────────────────────── */
+#columnPickerPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  padding: 8px;
+  min-width: 220px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+#columnPickerPanel.open { display: block !important; }
+.col-picker-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text3);
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.col-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text2);
+}
+.col-picker-row:hover { background: rgba(99,102,241,0.08); color: var(--text); }
+.col-picker-row input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+.col-picker-row.locked { opacity: 0.55; cursor: default; }
+.col-picker-row.locked:hover { background: none; color: var(--text2); }
 </style>
 </head>
 <body>
@@ -1112,6 +1153,10 @@ tr.section-row.section-sublevel td {
     </div>
     <button class="refresh-btn" id="viewToggle" onclick="toggleViewMode()" title="show execution tracking view">execution view</button>
     <button class="refresh-btn" id="dashboardToggle" onclick="toggleDashboardMode()" title="show executive health dashboard">📊 dashboard view</button>
+    <div style="position:relative;display:inline-block">
+      <button class="refresh-btn" id="columnPickerToggle" onclick="toggleColumnPicker()" title="choose which columns are visible" style="display:none">⚙ columns</button>
+      <div id="columnPickerPanel" style="display:none"></div>
+    </div>
     <button class="refresh-btn" onclick="loadData()">↻ refresh</button>
   </div>
 </div>
@@ -1196,22 +1241,18 @@ const PROJECTS = {
     // flatRows: tells renderCustomColumnsTable to preserve the exact sheet
     // row sequence within each Part block (no sorting, no sub-grouping).
     flatRows: true,
-    // Part Name + Supply Model are NOT row columns — they're shown once in
-    // the Part header (handled separately from this list).
-    columns: [
-      { key: 'function',    label: 'Function',         minWidth: 110 },
-      { key: 'activity',    label: 'Activity',         minWidth: 220 },
-      { key: 'responsible', label: 'Responsible',      minWidth: 100 },
-      { key: 'accountable', label: 'Accountable',      minWidth: 110 },
-      { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
-      { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
-      { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
-      { key: 'plannedEnd',  label: 'Planned End',      minWidth: 100, isDate: true },
-      { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
-      { key: 'aging',       label: 'Aging',            minWidth: 60  },
-      { key: 'status',      label: 'Status',           minWidth: 90  },
-      { key: 'dependency',  label: 'Dependency',       minWidth: 130 },
-    ],
+    // customTable: routes this project through renderCustomColumnsTable
+    // (the dynamic-columns engine) instead of Array's renderTable.
+    customTable: true,
+    // The full column set is now DERIVED from whatever the parser finds in
+    // the sheet (see deriveAllColumns) — nothing is hand-listed here. Any
+    // future column added to the spreadsheet (Customer, Project Code,
+    // Revision, ...) appears automatically, available via the column
+    // picker. This list only controls which columns are visible BY
+    // DEFAULT, keeping the table compact; everything else stays one click
+    // away in "⚙ columns" or in the task detail drawer (which always shows
+    // every field regardless of visibility).
+    defaultVisibleColumns: ['function', 'activity', 'responsible', 'startDate', 'plannedEnd', 'status'],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',
     master:     '',
     milestones: '',
@@ -1344,17 +1385,30 @@ let usingDemo = false;
 let viewMode = 'planning';
 // Holds the last rendered task array so the drawer can access it by row index
 let _lastRenderedTasks = [];
+// Unfiltered task set for the active project (before func/phase/owner
+// filters) — lets the column picker always show every available column.
+let _lastFullTaskSet = [];
 
 function syncViewToggle() {
   const btn = document.getElementById('viewToggle');
   if (!btn) return;
   // Hide the planning/execution toggle for projects that use a custom column layout
-  if (proj().columns) { btn.style.display = 'none'; return; }
+  if (proj().customTable) { btn.style.display = 'none'; return; }
   btn.style.display = '';
   const isExecution = viewMode === 'execution';
   btn.textContent = isExecution ? 'planning view' : 'execution view';
   btn.title = isExecution ? 'show current planning gantt view' : 'show execution tracking view';
   btn.classList.toggle('active-view', isExecution);
+}
+
+// Shows the "⚙ columns" picker button only for projects using the dynamic
+// columns engine (proj().customTable). Closes any open panel on switch.
+function syncColumnPickerVisibility() {
+  const btn = document.getElementById('columnPickerToggle');
+  const panel = document.getElementById('columnPickerPanel');
+  if (!btn) return;
+  btn.style.display = proj().customTable ? '' : 'none';
+  if (panel) panel.classList.remove('open');
 }
 
 // ── COMPACT HEADER TOGGLE ─────────────────────────────────────────────────
@@ -2114,6 +2168,7 @@ function switchProject(projectId) {
 
   syncViewToggle();
   syncDashboardToggle();
+  syncColumnPickerVisibility();
 
   // Reset filter dropdowns.
   ['funcFilter','phaseFilter','ownerFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
@@ -2183,6 +2238,145 @@ let pvhFuncSort = null;
 function toggleFunctionColumnSort() {
   pvhFuncSort = pvhFuncSort === null ? 'asc' : pvhFuncSort === 'asc' ? 'desc' : null;
   renderAll();
+}
+
+// ── DYNAMIC COLUMN VISIBILITY (customTable engine, e.g. PVH) ───────────────
+// Every column the parser found in the sheet is always available; only the
+// VISIBLE subset is restricted, and that restriction is purely a per-user,
+// per-project display preference — never a data-loss decision. Hidden
+// columns remain fully accessible in the task detail drawer.
+const COL_VIS_KEY_PREFIX = 'rasic_col_visibility_';
+
+function loadColumnVisibility(projectId, defaults) {
+  try {
+    const raw = localStorage.getItem(COL_VIS_KEY_PREFIX + projectId);
+    if (raw) return new Set(JSON.parse(raw));
+  } catch (e) { /* corrupt storage — fall through to defaults */ }
+  return new Set(defaults || []);
+}
+
+function saveColumnVisibility(projectId, visibleSet) {
+  try {
+    localStorage.setItem(COL_VIS_KEY_PREFIX + projectId, JSON.stringify([...visibleSet]));
+  } catch (e) { /* storage unavailable — visibility just won't persist */ }
+}
+
+// Per-project Set of visible column keys, lazily initialised on first render.
+let columnVisibility = null;
+let columnVisibilityProjectId = null;
+
+function ensureColumnVisibilityLoaded() {
+  if (columnVisibilityProjectId !== activeProjectId) {
+    columnVisibility = loadColumnVisibility(activeProjectId, proj().defaultVisibleColumns);
+    columnVisibilityProjectId = activeProjectId;
+  }
+  return columnVisibility;
+}
+
+function toggleColumnVisibility(key) {
+  const vis = ensureColumnVisibilityLoaded();
+  if (vis.has(key)) {
+    if (vis.size <= 1) return; // never allow hiding every column
+    vis.delete(key);
+  } else {
+    vis.add(key);
+  }
+  saveColumnVisibility(activeProjectId, vis);
+  renderAll();
+  // Keep the panel's checkboxes in sync if it's still open.
+  const panel = document.getElementById('columnPickerPanel');
+  if (panel && panel.classList.contains('open')) renderColumnPickerPanel();
+}
+
+function toggleColumnPicker() {
+  const panel = document.getElementById('columnPickerPanel');
+  if (!panel) return;
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) renderColumnPickerPanel();
+}
+
+// Close the picker when clicking outside it.
+document.addEventListener('click', function(e) {
+  const panel = document.getElementById('columnPickerPanel');
+  const btn = document.getElementById('columnPickerToggle');
+  if (!panel || !panel.classList.contains('open')) return;
+  if (panel.contains(e.target) || (btn && btn.contains(e.target))) return;
+  panel.classList.remove('open');
+});
+
+function renderColumnPickerPanel() {
+  const panel = document.getElementById('columnPickerPanel');
+  if (!panel || !proj().customTable) return;
+  const allCols = deriveAllColumns(_lastFullTaskSet || []);
+  const vis = ensureColumnVisibilityLoaded();
+  panel.innerHTML = `
+    <div class="col-picker-label">Visible columns</div>
+    ${allCols.map(c => {
+      const checked = vis.has(c.key);
+      const locked = c.key === 'activity'; // Activity always stays visible
+      return `<div class="col-picker-row${locked?' locked':''}" data-action="${locked?'':'toggle-col-visibility'}" data-col-key="${escapeHTML(c.key)}">
+        <input type="checkbox" ${checked?'checked':''} ${locked?'disabled':''} tabindex="-1">
+        <span>${escapeHTML(c.label)}</span>
+      </div>`;
+    }).join('')}
+  `;
+}
+
+// Derives the FULL set of available columns for the active project's tasks
+// — every core field that resolves to a non-empty value on at least one
+// task, plus every distinct _extra field present, in first-seen order.
+// This is what makes new spreadsheet columns (Customer, Project Code, ...)
+// appear automatically without any code change — see Phase 2 of the data
+// model spec: parser output drives the column list, not a hardcoded array.
+function deriveAllColumns(tasks) {
+  if (!tasks || !tasks.length) return [];
+  const norm = s => (s || '').toLowerCase().replace(/[\s_\-\/]+/g, '');
+
+  // Known semantic fields, in a sensible default order. "Known" only means
+  // we have nicer labels/widths/date-formatting for them — any of these
+  // that don't resolve to data on this project's tasks are simply skipped.
+  const knownDefs = [
+    { key: 'function',    label: 'Function',         minWidth: 110 },
+    { key: 'activity',    label: 'Activity',         minWidth: 220 },
+    { key: 'responsible', label: 'Responsible',      minWidth: 100 },
+    { key: 'accountable', label: 'Accountable',      minWidth: 110 },
+    { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
+    { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
+    { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
+    { key: 'plannedEnd',  label: 'Planned End',      minWidth: 100, isDate: true },
+    { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
+    { key: 'aging',       label: 'Aging',            minWidth: 60  },
+    { key: 'status',      label: 'Status',           minWidth: 90  },
+    { key: 'dependency',  label: 'Dependency',       minWidth: 130 },
+  ];
+  const known = knownDefs.filter(d => tasks.some(t => resolveColumnValue(t, d.key)));
+  const knownKeys = new Set(known.map(d => norm(d.key)));
+
+  // Fields that are folded into the Part-header title (grouping key + the
+  // value shown in brackets) are excluded from the row-column list — they
+  // would be redundant noise on every single row.
+  const grouping = proj().grouping || [];
+  const excludedKeys = new Set(grouping.map(norm));
+  excludedKeys.add('supplymodel'); // shown in the Part header, e.g. "(Bought Out)"
+
+  const discovered = [];
+  const seen = new Set();
+  tasks.forEach(t => {
+    if (!t._extra) return;
+    Object.keys(t._extra).forEach(label => {
+      const nk = norm(label);
+      if (knownKeys.has(nk) || excludedKeys.has(nk) || seen.has(nk)) return;
+      seen.add(nk);
+      discovered.push({
+        key: nk,
+        label,
+        minWidth: Math.max(70, Math.min(180, label.length * 7 + 24)),
+        isDate: /date/i.test(label),
+      });
+    });
+  });
+
+  return [...known, ...discovered];
 }
 
 // Toggle a group path. Full re-render (not DOM walk) — required for multi-level
@@ -2412,7 +2606,7 @@ function renderAll() {
   }
   applyDashboardVisibility();
   if (dashboardActive) renderDashboard();
-  else if (proj().columns) renderCustomColumnsTable();
+  else if (proj().customTable) renderCustomColumnsTable();
   else renderTable();
 }
 let zoomMode = 'overview';
@@ -2818,7 +3012,7 @@ function renderExecutionTable() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CUSTOM COLUMN RENDERER — used when proj().columns is defined (e.g. PVH).
+// CUSTOM COLUMN RENDERER — used when proj().customTable is true (e.g. PVH).
 // Array uses the original renderTable / renderExecutionTable unchanged.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2862,12 +3056,25 @@ function resolveColumnValue(task, key) {
   return '';
 }
 
-// Renders the custom column table for projects with proj().columns defined.
+// Renders the custom column table for projects with proj().customTable = true.
 // Always uses executionTasks (merged planning + master) so every defined
 // column — including master-sheet fields like responsible/accountable — is
 // available even when only the planning sheet has loaded (fields will be '').
 function renderCustomColumnsTable() {
-  const cols = proj().columns || [];
+  // Full, unfiltered task set — used to derive the complete column list so
+  // the column picker always shows every available field regardless of the
+  // current func/phase/owner filter state.
+  _lastFullTaskSet = executionTasks;
+  const allCols = deriveAllColumns(executionTasks);
+  const visibleKeys = ensureColumnVisibilityLoaded();
+  // Only show columns that are (a) marked visible AND (b) actually exist in
+  // the derived set (guards against a stale localStorage key referencing a
+  // column that no longer appears in the sheet).
+  const allColKeys = new Set(allCols.map(c => c.key));
+  const cols = allCols.filter(c => visibleKeys.has(c.key) || c.key === 'activity');
+  // Sync visibility set if it referenced now-vanished columns (silent cleanup).
+  [...visibleKeys].forEach(k => { if (!allColKeys.has(k)) visibleKeys.delete(k); });
+
   const colCount = cols.length + 1; // last col = Gantt bar
 
   const selFunc  = document.getElementById('funcFilter').value;
@@ -3636,6 +3843,10 @@ document.body.addEventListener('click', function(e) {
     e.stopPropagation();
     filterByFunctionQuick(el.dataset.func);
 
+  } else if (action === 'toggle-col-visibility') {
+    e.stopPropagation();
+    toggleColumnVisibility(el.dataset.colKey);
+
   } else if (action === 'toggle-group') {
     toggleGroup(el.dataset.groupPath);
 
@@ -4290,6 +4501,7 @@ function downloadDashboardReport() {
 
 setInterval(loadData, 5 * 60 * 1000);
 
+syncColumnPickerVisibility();
 loadData();
 renderMilestoneList();
 </script>
