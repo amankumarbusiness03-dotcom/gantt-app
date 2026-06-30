@@ -1228,6 +1228,23 @@ const PROJECTS = {
   array: {
     name: 'Array',
     grouping: ['function'],
+    // columnPicker: opts Array into the SAME shared "⚙ columns" component
+    // PVH uses (see deriveAllColumns / ensureColumnVisibilityLoaded).
+    // Unlike PVH, Array keeps its own bespoke renderTable/renderExecutionTable
+    // (Gantt bars, lead-time-extension segments, progress fill, milestone
+    // diamonds — none of that changes) — only which non-bar columns those
+    // renderers print, and in what order, is now driven by this shared
+    // config instead of a hard-coded <th>/<td> list.
+    columnPicker: true,
+    // No defaultVisibleColumns configured → the shared picker falls back to
+    // "show every available column", which is exactly Array's current
+    // behaviour (Execution View has always shown every master-sheet field
+    // with no way to hide any of them). Users can now hide columns; the
+    // out-of-the-box layout is unchanged.
+    // columnOrder mirrors the exact current Execution View column sequence
+    // (Function is omitted on purpose — it's the grouping/section-header
+    // key for Array, never a row column).
+    columnOrder: ['activity', 'responsible', 'accountable', 'startDate', 'plannedEnd', 'leadTime', 'actualEnd', 'aging', 'status', 'dependency', 'buffer'],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCg1Ss7ThsfUG-M1LhQ_9HZCLT7qvyI7xqDZHY1fD8IdGiPDIwCKrjV7FNe4FGSCHaLSjAYolbrg4J/pub?gid=1335817557&single=true&output=csv',
     master:     'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=781632851',
     milestones: 'https://docs.google.com/spreadsheets/d/1bT61G5NTfdGXjkgIHEFoqdocCczcpFN6hywaxO9Q634/export?format=csv&gid=249722363',
@@ -1253,6 +1270,11 @@ const PROJECTS = {
     // away in "⚙ columns" or in the task detail drawer (which always shows
     // every field regardless of visibility).
     defaultVisibleColumns: ['function', 'activity', 'responsible', 'startDate', 'plannedEnd', 'status'],
+    // columnOrder: Activity leads (primary thing users look for), Function
+    // immediately after (it's just a category describing the activity).
+    // Grouping/Part-header behaviour is untouched — this only reorders the
+    // row columns themselves.
+    columnOrder: ['activity', 'function', 'responsible', 'accountable', 'leadTime', 'buffer', 'startDate', 'plannedEnd', 'actualEnd', 'aging', 'status', 'dependency'],
     planning:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vSCZNRazkeaRCKC5-O2PsxZsCzuZH7nZY61KogarblA-V4zNb3isPRh8fn-7wxfDJMBIVEpXVW9b4fb/pub?output=csv',
     master:     '',
     milestones: '',
@@ -1401,13 +1423,21 @@ function syncViewToggle() {
   btn.classList.toggle('active-view', isExecution);
 }
 
-// Shows the "⚙ columns" picker button only for projects using the dynamic
-// columns engine (proj().customTable). Closes any open panel on switch.
+// Shows the "⚙ columns" picker button only for projects using the shared
+// dynamic columns engine. PVH (customTable) uses it everywhere — it has no
+// separate planning/execution view. Any other project can opt in via
+// columnPicker: true, in which case it's only relevant in Execution View
+// (the view that carries the rich merged column set) — Planning View's
+// fixed RASIC columns are untouched.
+function columnPickerAvailable() {
+  return !!proj().customTable || (!!proj().columnPicker && viewMode === 'execution');
+}
+
 function syncColumnPickerVisibility() {
   const btn = document.getElementById('columnPickerToggle');
   const panel = document.getElementById('columnPickerPanel');
   if (!btn) return;
-  btn.style.display = proj().customTable ? '' : 'none';
+  btn.style.display = columnPickerAvailable() ? '' : 'none';
   if (panel) panel.classList.remove('open');
 }
 
@@ -1438,6 +1468,7 @@ function toggleViewMode() {
   const ownerSel = document.getElementById('ownerFilter');
   if (ownerSel) ownerSel.value = '';
   syncViewToggle();
+  syncColumnPickerVisibility();
   renderAll();
 }
 
@@ -2307,7 +2338,15 @@ let columnVisibilityProjectId = null;
 
 function ensureColumnVisibilityLoaded() {
   if (columnVisibilityProjectId !== activeProjectId) {
-    columnVisibility = loadColumnVisibility(activeProjectId, proj().defaultVisibleColumns);
+    const configured = proj().defaultVisibleColumns;
+    // No curated default list configured for this project → fall back to
+    // showing every column the parser found (preserves Array's existing
+    // "Execution View always showed every field" behaviour exactly, while
+    // still letting the user hide columns from here on).
+    const defaults = (configured && configured.length)
+      ? configured
+      : deriveAllColumns(_lastFullTaskSet || []).map(c => c.key);
+    columnVisibility = loadColumnVisibility(activeProjectId, defaults);
     columnVisibilityProjectId = activeProjectId;
   }
   return columnVisibility;
@@ -2346,7 +2385,7 @@ document.addEventListener('click', function(e) {
 
 function renderColumnPickerPanel() {
   const panel = document.getElementById('columnPickerPanel');
-  if (!panel || !proj().customTable) return;
+  if (!panel || !columnPickerAvailable()) return;
   const allCols = deriveAllColumns(_lastFullTaskSet || []);
   const vis = ensureColumnVisibilityLoaded();
   panel.innerHTML = `
@@ -2372,32 +2411,45 @@ function deriveAllColumns(tasks) {
   if (!tasks || !tasks.length) return [];
   const norm = s => (s || '').toLowerCase().replace(/[\s_\-\/]+/g, '');
 
-  // Known semantic fields, in a sensible default order. "Known" only means
-  // we have nicer labels/widths/date-formatting for them — any of these
-  // that don't resolve to data on this project's tasks are simply skipped.
-  const knownDefs = [
-    { key: 'function',    label: 'Function',         minWidth: 110 },
-    { key: 'activity',    label: 'Activity',         minWidth: 220 },
-    { key: 'responsible', label: 'Responsible',      minWidth: 100 },
-    { key: 'accountable', label: 'Accountable',      minWidth: 110 },
-    { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
-    { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
-    { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
-    { key: 'plannedEnd',  label: 'Planned End',      minWidth: 100, isDate: true },
-    { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
-    { key: 'aging',       label: 'Aging',            minWidth: 60  },
-    { key: 'status',      label: 'Status',           minWidth: 90  },
-    { key: 'dependency',  label: 'Dependency',       minWidth: 130 },
-  ];
-  const known = knownDefs.filter(d => tasks.some(t => resolveColumnValue(t, d.key)));
-  const knownKeys = new Set(known.map(d => norm(d.key)));
+  // Known semantic fields — labels/widths/date-formatting live here once,
+  // shared by every project. "Known" only means we have a nicer label for
+  // it; any of these that don't resolve to data on this project's tasks
+  // are simply skipped. The DEFAULT_ORDER is just the historical PVH order,
+  // used only as a fallback for any project that doesn't configure its own
+  // columnOrder — see PROJECTS.<id>.columnOrder for the source of truth.
+  const KNOWN_COLUMN_DEFS = {
+    function:    { key: 'function',    label: 'Function',         minWidth: 110 },
+    activity:    { key: 'activity',    label: 'Activity',         minWidth: 220 },
+    responsible: { key: 'responsible', label: 'Responsible',      minWidth: 100 },
+    accountable: { key: 'accountable', label: 'Accountable',      minWidth: 110 },
+    leadTime:    { key: 'leadTime',    label: 'Lead Time',        minWidth: 70  },
+    buffer:      { key: 'buffer',      label: 'Buffer',           minWidth: 60  },
+    startDate:   { key: 'startDate',   label: 'Start Date',       minWidth: 80,  isDate: true },
+    plannedEnd:  { key: 'plannedEnd',  label: 'Planned End',      minWidth: 100, isDate: true },
+    actualEnd:   { key: 'actualEnd',   label: 'Actual End Date',  minWidth: 100, isDate: true },
+    aging:       { key: 'aging',       label: 'Aging',            minWidth: 60  },
+    status:      { key: 'status',      label: 'Status',           minWidth: 90  },
+    dependency:  { key: 'dependency',  label: 'Dependency',       minWidth: 130 },
+  };
+  const DEFAULT_ORDER = ['function','activity','responsible','accountable','leadTime','buffer','startDate','plannedEnd','actualEnd','aging','status','dependency'];
 
-  // Fields that are folded into the Part-header title (grouping key + the
-  // value shown in brackets) are excluded from the row-column list — they
-  // would be redundant noise on every single row.
+  // Fields folded into the group header (the grouping key itself, plus
+  // Supply Model which PVH shows in the Part-header title) are excluded
+  // from the row-column list — for ANY project, not just PVH. This is what
+  // keeps Array's "function" (its grouping key) out of the row columns
+  // without any project-specific branch: Array groups by function, so
+  // function is excluded here exactly the same way partName never appears
+  // as a row column for PVH.
   const grouping = proj().grouping || [];
   const excludedKeys = new Set(grouping.map(norm));
-  excludedKeys.add('supplymodel'); // shown in the Part header, e.g. "(Bought Out)"
+  excludedKeys.add('supplymodel');
+
+  const orderKeys = (proj().columnOrder && proj().columnOrder.length) ? proj().columnOrder : DEFAULT_ORDER;
+  const known = orderKeys
+    .map(k => KNOWN_COLUMN_DEFS[k])
+    .filter(Boolean)
+    .filter(d => !excludedKeys.has(norm(d.key)) && tasks.some(t => resolveColumnValue(t, d.key)));
+  const knownKeys = new Set(known.map(d => norm(d.key)));
 
   const discovered = [];
   const seen = new Set();
@@ -2412,6 +2464,7 @@ function deriveAllColumns(tasks) {
         label,
         minWidth: Math.max(70, Math.min(180, label.length * 7 + 24)),
         isDate: /date/i.test(label),
+        extra: true,
       });
     });
   });
@@ -2702,6 +2755,16 @@ function renderExecutionTable() {
     return { ...t, _execStart: execStart, _plannedEnd: plannedEnd, _execEnd: execEnd, _rag: executionRagStatus(t) };
   });
 
+  // ── Shared column engine (same component PVH's ⚙ columns uses) ──────────
+  // _lastFullTaskSet is the UNFILTERED set, so the picker always lists every
+  // column the sheet has, regardless of the active func/phase/owner filter.
+  _lastFullTaskSet = executionTasks;
+  const allColsExec = deriveAllColumns(executionTasks);
+  const visibleKeysExec = ensureColumnVisibilityLoaded();
+  const allColKeysExec = new Set(allColsExec.map(c => c.key));
+  const cols = allColsExec.filter(c => visibleKeysExec.has(c.key) || c.key === 'activity');
+  [...visibleKeysExec].forEach(k => { if (!allColKeysExec.has(k)) visibleKeysExec.delete(k); });
+
   const total      = tasks.length;
   const redCount   = tasks.filter(t => t._rag === 'red').length;
   const amberCount = tasks.filter(t => t._rag === 'amber').length;
@@ -2736,7 +2799,7 @@ function renderExecutionTable() {
 
   if (!allD.length) {
     document.getElementById('zoom-bar').innerHTML = '';
-    document.getElementById('table-wrap').innerHTML = '<table><tbody><tr class="empty-row"><td colspan="10">no execution tasks match filters</td></tr></tbody></table>';
+    document.getElementById('table-wrap').innerHTML = `<table><tbody><tr class="empty-row"><td colspan="${cols.length + 1}">no execution tasks match filters</td></tr></tbody></table>`;
     document.getElementById('loading').style.display='none';
     document.getElementById('table-wrap').style.display='block';
     return;
@@ -2859,38 +2922,19 @@ function renderExecutionTable() {
       }).join('')}
     </div>` : '';
 
-  // ── Extra field columns (execution view) ────────────────────────────────
-  const execExtraNames = [];
-  const execExtraSet = new Set();
-  tasks.forEach(t => {
-    if (t._extra) Object.keys(t._extra).forEach(k => {
-      if (!execExtraSet.has(k)) { execExtraSet.add(k); execExtraNames.push(k); }
-    });
-  });
-  const execExtraCount = execExtraNames.length;
-
   // Store for drawer access
   _lastRenderedTasks = tasks;
 
   // ── Build grouping tree (configurable hierarchy) ─────────────────────────
   const grouping = proj().grouping || ['function'];
   const tree = buildGroupTree(tasks, grouping);
-  const totalExecCols = 10 + execExtraCount;
+  const totalExecCols = cols.length + 1; // +1 for the trailing Gantt-bar column
   const excludedExecKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
 
   let html = `<table style="min-width:1450px">
   <thead>
     <tr>
-      <th style="min-width:220px">activity</th>
-      <th style="min-width:92px">responsible</th>
-      <th style="min-width:92px">accountable</th>
-      <th style="min-width:72px">start date</th>
-      <th style="min-width:92px">planned end</th>
-      <th style="min-width:72px">lead time</th>
-      <th style="min-width:86px">actual end</th>
-      <th style="min-width:54px">aging</th>
-      <th style="min-width:96px">status</th>
-      ${execExtraNames.map(n => `<th class="extra-col-th" title="Project-specific field">${escapeHTML(n)}</th>`).join('')}
+      ${cols.map(c => `<th class="${c.extra ? 'extra-col-th' : ''}" style="min-width:${c.minWidth||80}px" ${c.extra?'title="Project-specific field"':''}>${escapeHTML(c.label)}</th>`).join('')}
       <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
@@ -3011,9 +3055,41 @@ function renderExecutionTable() {
               data-ms-rag-label="${ragLabel}"></div>`;
           }
 
-          const execExtraCells = execExtraNames.map(n =>
-            `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
-          ).join('');
+          // ── Cell rendering, driven by the shared `cols` list (same engine
+          // PVH uses) instead of a hard-coded <td> sequence. Each known key
+          // keeps its exact pre-existing visual treatment; anything else
+          // (a discovered _extra field, or a known field with no special
+          // case) falls back to the generic resolver — identical to how
+          // PVH's buildTaskRow already handles its own extra columns.
+          const execCellHTML = (c) => {
+            switch (c.key) {
+              case 'activity':
+                return `<td class="activity-cell">
+              <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>`;
+              case 'responsible':
+                return `<td>${t.responsible
+                  ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
+                  : '<span style="color:var(--text3)">-</span>'}</td>`;
+              case 'accountable':
+                return `<td>${dash(t.accountable)}</td>`;
+              case 'startDate':
+                return `<td class="date-cell">${dash(fmt(t._execStart))}</td>`;
+              case 'plannedEnd':
+                return `<td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>`;
+              case 'leadTime':
+                return `<td class="date-cell">${dash(t.leadTimeRequested)}</td>`;
+              case 'actualEnd':
+                return `<td class="date-cell">${dash(fmt(t.actualEndDate))}</td>`;
+              case 'aging':
+                return `<td class="date-cell">${dash(t.aging)}</td>`;
+              case 'status':
+                return `<td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>`;
+              default: {
+                const val = resolveColumnValue(t, c.key);
+                return `<td class="${c.extra ? 'extra-col-td' : 'date-cell'}" title="${escapeHTML(c.label)}${val?': '+escapeHTML(val):''}">${val ? escapeHTML(c.isDate ? fmt(val) : val) : '—'}</td>`;
+              }
+            }
+          };
 
           const execTaskIdx = _lastRenderedTasks.indexOf(t);
           const barFillHTML = (hasDates && plannedSeg)
@@ -3021,19 +3097,7 @@ function renderExecutionTable() {
                ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}`
             : '';
           out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${execTaskIdx}">
-            <td class="activity-cell">
-              <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}${!t.masterMatched ? '<span style="font-size:9px;font-family:var(--mono);color:var(--text3);margin-left:5px" title="No matching row found in Master Sheet">·no master</span>' : ''}</td>
-            <td>${t.responsible
-              ? `<span class="owner-pill${responsibleActive}" data-action="filter-owner" data-owner="${escapeHTML(t.responsible)}" title="click to filter by ${escapeHTML(t.responsible)}">${escapeHTML(t.responsible)}</span>`
-              : '<span style="color:var(--text3)">-</span>'}</td>
-            <td>${dash(t.accountable)}</td>
-            <td class="date-cell">${dash(fmt(t._execStart))}</td>
-            <td class="date-cell">${dash(fmt(t.plannedEndDate))}</td>
-            <td class="date-cell">${dash(t.leadTimeRequested)}</td>
-            <td class="date-cell">${dash(fmt(t.actualEndDate))}</td>
-            <td class="date-cell">${dash(t.aging)}</td>
-            <td><span style="font-family:var(--mono);font-size:10px;color:${ragColor(rag)};white-space:nowrap">${escapeHTML(statusText)}</span></td>
-            ${execExtraCells}
+            ${cols.map(execCellHTML).join('')}
             <td class="bar-col">
               <div class="bar-outer">
                 ${gridLines}
