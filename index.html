@@ -1041,6 +1041,14 @@ tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+.group-part-supply {
+  font-weight: 400;
+  text-transform: none;
+  color: var(--text3);
+  letter-spacing: normal;
+  font-size: 11px;
+  margin-left: 2px;
+}
 .group-part-meta {
   display: flex;
   align-items: center;
@@ -2099,6 +2107,7 @@ function switchProject(projectId) {
   dashboardActive = false;
   activeOwner = '';
   collapsedGroups.clear();
+  pvhFuncSort = null;
   taskMilestones.clear();
   zoomMode = 'overview';
   zoomMonth = null;
@@ -2165,6 +2174,16 @@ function renderMilestoneList() {
 // For PVH (two-level), part paths are e.g. "DAMPER", function paths are
 // e.g. "DAMPER||Procurement" (pipe separator — safe in any CSV data).
 const collapsedGroups = new Set();
+
+// ── Function-column sort (flatRows projects only, e.g. PVH) ────────────────
+// null = untouched spreadsheet order (default). 'asc'/'desc' = stable sort
+// by Function value within each Part block, applied only when the user
+// clicks the Function column header — never on by default.
+let pvhFuncSort = null;
+function toggleFunctionColumnSort() {
+  pvhFuncSort = pvhFuncSort === null ? 'asc' : pvhFuncSort === 'asc' ? 'desc' : null;
+  renderAll();
+}
 
 // Toggle a group path. Full re-render (not DOM walk) — required for multi-level
 // nesting because hiding a parent must also hide all descendant rows.
@@ -2968,7 +2987,13 @@ function renderCustomColumnsTable() {
   let html = `<table style="min-width:${minTableWidth}px">
   <thead>
     <tr>
-      ${cols.map(c => `<th style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`).join('')}
+      ${cols.map(c => {
+        if (c.key === 'function' && isFlatRows) {
+          const arrow = pvhFuncSort === 'asc' ? ' ▲' : pvhFuncSort === 'desc' ? ' ▼' : '';
+          return `<th style="min-width:${c.minWidth||80}px;cursor:pointer;user-select:none" data-action="sort-function-col" title="Click to sort by Function within each Part (does not change grouping)">${escapeHTML(c.label)}${arrow}</th>`;
+        }
+        return `<th style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`;
+      }).join('')}
       <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
@@ -3039,10 +3064,20 @@ function renderCustomColumnsTable() {
       const rc2 = { red:0, amber:0, green:0 };
       node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
 
-      // Part header — shows Part Name + Supply Model (and any other constant
-      // metadata) exactly once per block, plus activity/RAG counts.
+      // Part header — title reads "PART NAME (Supply Model)"; any OTHER
+      // constant metadata (besides the grouping key + Supply Model, which is
+      // now folded into the title) still appears as chips beneath it.
       const constMeta = getGroupConstantMeta(node.tasks, excludedGrpKeys);
-      const metaEntries = Object.entries(constMeta).slice(0, 4);
+      // Pull Supply Model out of the chip set — it goes in the title instead.
+      const supplyModelEntry = Object.entries(constMeta).find(([k]) =>
+        k.toLowerCase().replace(/[\s_\-\/]+/g, '').includes('supplymodel')
+      );
+      const supplyModelVal = supplyModelEntry ? supplyModelEntry[1] : '';
+      const titleHTML = supplyModelVal
+        ? `${escapeHTML(node.name)} <span class="group-part-supply">(${escapeHTML(supplyModelVal)})</span>`
+        : escapeHTML(node.name);
+      const remainingMeta = Object.entries(constMeta).filter(([k]) => k !== (supplyModelEntry && supplyModelEntry[0]));
+      const metaEntries = remainingMeta.slice(0, 4);
       const chips = [
         ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
         `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
@@ -3052,13 +3087,24 @@ function renderCustomColumnsTable() {
       ].filter(Boolean).join('');
       out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}">
         <td colspan="${colCount}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
-          <div class="group-part-header"><span class="section-toggle">${isCollapsed?'▶':'▼'}</span><span class="group-part-name">${escapeHTML(node.name)}</span></div>
+          <div class="group-part-header"><span class="section-toggle">${isCollapsed?'▶':'▼'}</span><span class="group-part-name">${titleHTML}</span></div>
           <div class="group-part-meta">${chips}</div>
         </td>
       </tr>`;
 
-      // Activity rows — exact original sheet order, no sub-grouping.
-      node.tasks.forEach(t => { out += buildTaskRow(t, isCollapsed); });
+      // Activity rows — exact original sheet order, no sub-grouping (unless
+      // the user has clicked the Function column header to sort — see
+      // pvhFuncSort below; default is null, i.e. untouched sheet order).
+      const rowsToRender = pvhFuncSort
+        ? [...node.tasks].sort((a, b) => {
+            const av = (resolveColumnValue(a, 'function') || '').toLowerCase();
+            const bv = (resolveColumnValue(b, 'function') || '').toLowerCase();
+            if (av < bv) return pvhFuncSort === 'asc' ? -1 : 1;
+            if (av > bv) return pvhFuncSort === 'asc' ?  1 : -1;
+            return 0; // stable: equal-function rows keep their original relative order
+          })
+        : node.tasks;
+      rowsToRender.forEach(t => { out += buildTaskRow(t, isCollapsed); });
     });
     return out;
   }
@@ -3578,6 +3624,9 @@ document.body.addEventListener('click', function(e) {
 
   } else if (action === 'toggle-group') {
     toggleGroup(el.dataset.groupPath);
+
+  } else if (action === 'sort-function-col') {
+    toggleFunctionColumnSort();
 
   } else if (action === 'toggle-task-ms') {
     toggleTaskMilestone(el.dataset.key, el);
