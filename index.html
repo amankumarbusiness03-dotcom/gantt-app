@@ -1300,7 +1300,35 @@ const PROJECTS = {
 // caching layer (that's Step 3, deliberately not done here). Every prior
 // `X` read/write below is now `App.state.X`; nothing about WHEN or WHY a
 // value changes was touched, only WHERE it's stored.
-const App = { state: {} };
+//
+// Step 3: cache utilities. Deliberately NOT a render-skip gate — these are
+// only ever used for (a) an instant first paint before the live fetch
+// resolves, and (b) a softer landing if a live sync fails. The live fetch
+// always runs unconditionally and always overwrites the cache + state once
+// it resolves. Keys are scoped by activeProjectId so switching projects can
+// never paint a different project's stale cache.
+const App = {
+  state: {},
+  getCacheKey(type) {
+    return `rasic_cache_${this.state.activeProjectId}_${type}`;
+  },
+  saveToCache(type, data) {
+    try {
+      localStorage.setItem(this.getCacheKey(type), JSON.stringify(data));
+    } catch (e) {
+      console.warn(`[CACHE] save failed for "${type}":`, e);
+    }
+  },
+  loadFromCache(type) {
+    try {
+      const raw = localStorage.getItem(this.getCacheKey(type));
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      console.warn(`[CACHE] load failed for "${type}" — ignoring corrupt entry:`, e);
+      return null;
+    }
+  },
+};
 
 // ── Active project state ──────────────────────────────────────────────────
 // Reads the last-used project from localStorage so re-opening the app
@@ -2032,6 +2060,15 @@ async function loadMasterSheetData() {
     return;
   }
 
+  // Step 3: instant paint from cache while the live fetch is in flight.
+  // Same rule as planning — scoped by activeProjectId, never a skip.
+  const cachedMaster = App.loadFromCache('master');
+  if (cachedMaster && cachedMaster.length) {
+    App.state.masterTasks = cachedMaster;
+    syncExecutionTasks();
+    if (App.state.viewMode === 'execution' && App.state.allTasks.length) renderAll();
+  }
+
   try {
     const url = masterUrl + (masterUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     const res = await fetch(url);
@@ -2042,11 +2079,16 @@ async function loadMasterSheetData() {
     if (!parsed) throw new Error('could not parse Master Sheet');
     App.state.masterTasks = parsed;
     App.state.masterSheetLoadError = '';
+    App.saveToCache('master', parsed);
     syncExecutionTasks();
     if (App.state.viewMode === 'execution' && App.state.allTasks.length) renderAll();
   } catch (e) {
     if (App.state._loadEpoch !== epoch) return;
-    App.state.masterTasks = [];
+    // A sync failure shouldn't blank out a perfectly good cached paint —
+    // only clear back to [] if we never had a cached fallback to begin with.
+    if (!cachedMaster || !cachedMaster.length) {
+      App.state.masterTasks = [];
+    }
     App.state.masterSheetLoadError = e.message;
     syncExecutionTasks();
     if (App.state.viewMode === 'execution' && App.state.allTasks.length) renderAll();
@@ -2128,6 +2170,14 @@ async function loadMilestoneSheetData() {
     return;
   }
 
+  // Step 3: instant paint from cache while the live fetch is in flight.
+  const cachedMilestones = App.loadFromCache('milestones');
+  if (cachedMilestones && cachedMilestones.length) {
+    App.state.milestones = cachedMilestones;
+    renderMilestoneList();
+    if (App.state.allTasks.length) renderAll();
+  }
+
   try {
     const url = msUrl + (msUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     const res = await fetch(url);
@@ -2138,6 +2188,7 @@ async function loadMilestoneSheetData() {
     if (!parsed) throw new Error('could not parse MILESTONES sheet');
     App.state.milestones = parsed;
     App.state.milestoneSheetLoadError = '';
+    App.saveToCache('milestones', parsed);
     renderMilestoneList();
     // Use renderAll (not renderTable) so the milestone gate markers refresh
     // correctly regardless of whether planning, execution, or dashboard is active.
@@ -2146,6 +2197,8 @@ async function loadMilestoneSheetData() {
     if (App.state._loadEpoch !== epoch) return;
     App.state.milestoneSheetLoadError = e.message;
     console.warn('[MILESTONES] Background load failed:', e);
+    // Cached milestones (if any) are left exactly as already painted above —
+    // a sync failure shouldn't blank out a perfectly good cached paint.
   }
 }
 
@@ -2175,8 +2228,6 @@ async function loadData() {
   // discard their results if it has changed by the time their fetch resolves.
   App.state._loadEpoch++;
   const sheetUrl = SHEET_CSV_URL();
-  document.getElementById('loading').style.display = 'flex';
-  document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
 
   // Reset all data so stale info from a previous project never bleeds through.
@@ -2184,7 +2235,30 @@ async function loadData() {
   App.state.executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
   renderMilestoneList();
 
-  // Fire background loads for the active project's optional sheets.
+  // ── Step 3: instant initial paint from cache ─────────────────────────
+  // getCacheKey() reads App.state.activeProjectId, which switchProject()
+  // already updated before calling loadData() — so this can only ever
+  // hydrate THIS project's own last-known-good data, never another
+  // project's. If nothing's cached, this is a no-op and the spinner shows
+  // exactly as it always did. The live fetch a few lines down is
+  // unconditional regardless of whether this hydration happened.
+  const cachedPlanning = App.loadFromCache('planning');
+  if (cachedPlanning && cachedPlanning.length) {
+    App.state.allTasks = cachedPlanning;
+    syncExecutionTasks();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('table-wrap').style.display = 'block';
+    setStatus('cached — syncing…', false);
+    document.getElementById('last-updated').textContent = 'showing last saved data — syncing live…';
+    renderAll();
+  } else {
+    document.getElementById('loading').style.display = 'flex';
+    document.getElementById('table-wrap').style.display = 'none';
+  }
+
+  // Fire background loads for the active project's optional sheets. Each
+  // hydrates from its own project-scoped cache the same way — see
+  // loadMasterSheetData() / loadMilestoneSheetData() below.
   loadMasterSheetData();
   loadMilestoneSheetData();
 
@@ -2209,23 +2283,34 @@ async function loadData() {
     const parsed = parseCSV(text);
     if (!parsed) throw new Error('could not parse sheet — open browser console (F12) to see which headers were detected. Required: Activity/Task column + Start/End date columns');
     debugTasks(parsed);
+    // Live data always wins, unconditionally — no equality check, no skip.
     App.state.allTasks = parsed;
     syncExecutionTasks();
     App.state.usingDemo = false;
+    App.saveToCache('planning', parsed);
     setStatus('live', true);
     document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
     renderAll();
   } catch(e) {
     if (e.name === 'AbortError') return;  // intentional cancel — don't show error
     console.warn('Sheet load failed:', e);
-    App.state.allTasks = DEMO_TASKS; App.state.usingDemo = true;
-    syncExecutionTasks();
-    setStatus('sheet error — showing demo', false);
-    document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
+    const hadCachedPaint = cachedPlanning && cachedPlanning.length;
+    // Only fall back to demo data if there's truly nothing real on screen —
+    // a failed live sync should never blank out a perfectly good cached
+    // paint that's already showing.
+    if (!hadCachedPaint) {
+      App.state.allTasks = DEMO_TASKS; App.state.usingDemo = true;
+      syncExecutionTasks();
+      setStatus('sheet error — showing demo', false);
+      document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
+      renderAll();
+    } else {
+      setStatus('sync error — showing cached data', false);
+      document.getElementById('last-updated').textContent = 'live sync failed — showing last saved data (' + e.message + ')';
+    }
     const errEl = document.getElementById('error-msg');
     errEl.style.display = 'block';
-    errEl.textContent = '⚠ Unable to load project "' + proj().name + '": ' + e.message + '. Showing demo data.';
-    renderAll();
+    errEl.textContent = '⚠ Unable to sync project "' + proj().name + '": ' + e.message + (hadCachedPaint ? '. Showing last saved data.' : '. Showing demo data.');
   }
 }
 
