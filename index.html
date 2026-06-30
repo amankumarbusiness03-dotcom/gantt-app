@@ -1018,16 +1018,19 @@ td {
 tr.task-row { cursor: pointer; }
 tr.task-row:hover td { background: rgba(99,102,241,0.07); }
 
-/* ── Multi-level grouping hierarchy ────────────────────────────────── */
-/* Intermediate group (Part-level) section row */
+/* ── PVH Part-level group header — compact, single-line, mirrors Array's
+   own .section-row styling rather than a rich metadata block. ──────────── */
 tr.section-group-part td {
-  background: rgba(99,102,241,0.10);
-  border-left: 3px solid var(--accent);
-  border-top: 1px solid rgba(99,102,241,0.28);
-  padding: 10px 16px 8px !important;
-}
-tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
-  /* subtle indent for first child after a part header */
+  background: rgba(28,33,50,0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border2);
+  padding: 7px 14px;
+  position: sticky;
+  top: 40px;
+  z-index: 9;
+  height: auto;
 }
 .group-part-header {
   display: flex;
@@ -1035,10 +1038,11 @@ tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
   gap: 8px;
 }
 .group-part-name {
-  font-size: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.03em;
+  color: var(--accent);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .group-part-supply {
@@ -1046,17 +1050,12 @@ tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
   text-transform: none;
   color: var(--text3);
   letter-spacing: normal;
-  font-size: 11px;
-  margin-left: 2px;
+  font-size: 10.5px;
+  margin-left: 1px;
 }
-.group-part-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 5px;
-  padding-left: 22px;
-}
+/* Legacy chip styles — retained for the generic multi-level tree engine
+   (used by any future non-flatRows custom-column project) but no longer
+   emitted by PVH's flat-rows renderer. */
 .part-meta-chip {
   display: inline-flex;
   align-items: center;
@@ -1076,7 +1075,8 @@ tr.section-group-part:not(.collapsed):not([style*="none"]) + tr td {
 .part-meta-amber .part-meta-key { color: rgba(251,191,36,0.6); }
 .part-meta-red   { border-color: rgba(247,95,95,0.35); color: var(--rag-red); }
 .part-meta-red .part-meta-key   { color: rgba(247,95,95,0.6); }
-/* Sub-function rows inside a part get left-indented */
+/* Sub-function indentation — used only by the generic multi-level tree
+   engine. PVH's flat-rows renderer never applies this class. */
 tr.section-row.section-sublevel td {
   padding-left: 32px !important;
 }
@@ -2328,6 +2328,21 @@ function filterByOwner(name) {
   else renderAll();
 }
 
+// ── PVH Function quick-filter — same click-to-filter interaction as the
+// Owner pills above, just targeting the existing "funcFilter" dropdown
+// instead of "ownerFilter". Clicking a Function cell value toggles it as
+// the active filter; clicking the same value again clears it. Because this
+// directly drives the same <select> the toolbar dropdown already reads,
+// no separate filtering logic is needed — renderCustomColumnsTable's
+// existing `selFunc` check picks it up automatically.
+function filterByFunctionQuick(name) {
+  const sel = document.getElementById('funcFilter');
+  if (!sel) return;
+  sel.value = (sel.value === name) ? '' : name;
+  if (dashboardActive) renderDashboard();
+  else renderAll();
+}
+
 // ── TASK-LINKED MILESTONES — per-row diamond at task end date ─────────────────
 // Key format: "func::activity" — stable across re-renders
 const taskMilestones = new Set();
@@ -3035,6 +3050,10 @@ function renderCustomColumnsTable() {
       if (c.key === 'activity') {
         return `<td class="activity-cell"><span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(val)}</td>`;
       }
+      if (c.key === 'function') {
+        const isActiveFunc = val && val === selFunc ? ' active-owner' : '';
+        return `<td>${val?`<span class="owner-pill${isActiveFunc}" data-action="filter-function-quick" data-func="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
+      }
       if (c.key === 'responsible') {
         const isActive = val && val === activeOwner ? ' active-owner' : '';
         return `<td>${val?`<span class="owner-pill${isActive}" data-action="filter-owner" data-owner="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
@@ -3061,14 +3080,13 @@ function renderCustomColumnsTable() {
     let out = '';
     groups.forEach(node => {
       const isCollapsed = collapsedGroups.has(node.path);
-      const rc2 = { red:0, amber:0, green:0 };
-      node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
 
-      // Part header — title reads "PART NAME (Supply Model)"; any OTHER
-      // constant metadata (besides the grouping key + Supply Model, which is
-      // now folded into the title) still appears as chips beneath it.
+      // Part header — title reads "PART NAME (Supply Model)" only. No
+      // metadata chips (Activities/Done/At Risk/Overdue) — the existing
+      // dashboard and filters already surface that, so the header stays
+      // compact and close to the Excel layout, matching Array's own
+      // single-line section-row style.
       const constMeta = getGroupConstantMeta(node.tasks, excludedGrpKeys);
-      // Pull Supply Model out of the chip set — it goes in the title instead.
       const supplyModelEntry = Object.entries(constMeta).find(([k]) =>
         k.toLowerCase().replace(/[\s_\-\/]+/g, '').includes('supplymodel')
       );
@@ -3076,19 +3094,11 @@ function renderCustomColumnsTable() {
       const titleHTML = supplyModelVal
         ? `${escapeHTML(node.name)} <span class="group-part-supply">(${escapeHTML(supplyModelVal)})</span>`
         : escapeHTML(node.name);
-      const remainingMeta = Object.entries(constMeta).filter(([k]) => k !== (supplyModelEntry && supplyModelEntry[0]));
-      const metaEntries = remainingMeta.slice(0, 4);
-      const chips = [
-        ...metaEntries.map(([k,v]) => `<span class="part-meta-chip"><span class="part-meta-key">${escapeHTML(k)}:</span> ${escapeHTML(v)}</span>`),
-        `<span class="part-meta-chip"><span class="part-meta-key">Activities:</span> ${node.tasks.length}</span>`,
-        rc2.green ? `<span class="part-meta-chip part-meta-green"><span class="part-meta-key">Done:</span> ${rc2.green}</span>` : '',
-        rc2.amber ? `<span class="part-meta-chip part-meta-amber"><span class="part-meta-key">At Risk:</span> ${rc2.amber}</span>` : '',
-        rc2.red   ? `<span class="part-meta-chip part-meta-red"><span class="part-meta-key">Overdue:</span> ${rc2.red}</span>` : '',
-      ].filter(Boolean).join('');
+
       out += `<tr class="section-row section-group-part${isCollapsed?' collapsed':''}">
         <td colspan="${colCount}" data-action="toggle-group" data-group-path="${escapeHTML(node.path)}" style="cursor:pointer">
-          <div class="group-part-header"><span class="section-toggle">${isCollapsed?'▶':'▼'}</span><span class="group-part-name">${titleHTML}</span></div>
-          <div class="group-part-meta">${chips}</div>
+          <span class="section-toggle">${isCollapsed?'▶':'▼'}</span>
+          <span class="group-part-name">${titleHTML}</span>
         </td>
       </tr>`;
 
@@ -3622,6 +3632,10 @@ document.body.addEventListener('click', function(e) {
     e.stopPropagation();
     filterByOwner(el.dataset.owner);
 
+  } else if (action === 'filter-function-quick') {
+    e.stopPropagation();
+    filterByFunctionQuick(el.dataset.func);
+
   } else if (action === 'toggle-group') {
     toggleGroup(el.dataset.groupPath);
 
@@ -3632,8 +3646,8 @@ document.body.addEventListener('click', function(e) {
     toggleTaskMilestone(el.dataset.key, el);
 
   } else if (action === 'show-detail') {
-    // Ignore if the click was on an interactive child (milestone btn, owner pill)
-    if (e.target.closest('[data-action="toggle-task-ms"],[data-action="filter-owner"]')) return;
+    // Ignore if the click was on an interactive child (milestone btn, owner pill, function pill)
+    if (e.target.closest('[data-action="toggle-task-ms"],[data-action="filter-owner"],[data-action="filter-function-quick"]')) return;
     const idx = parseInt(el.dataset.taskIdx, 10);
     if (!isNaN(idx) && _lastRenderedTasks[idx]) showTaskDetail(_lastRenderedTasks[idx]);
 
