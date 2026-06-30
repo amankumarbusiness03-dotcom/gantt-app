@@ -220,7 +220,17 @@ thead th {
   text-transform: uppercase;
   white-space: nowrap;
 }
-tbody tr { transition: background 0.12s; }
+tbody tr {
+  transition: background 0.12s;
+  /* Skip layout/paint work for rows currently scrolled out of view. Purely
+     a rendering-cost optimization — content-visibility never changes what
+     a row's HTML/data is, only when the browser bothers to paint it, so
+     this can't affect grouping, filtering, or Gantt-bar math. The estimate
+     below just keeps the scrollbar/scroll-position accurate before an
+     off-screen row has been measured for real. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
+}
 tbody tr:hover td { background: rgba(255,255,255,0.02); }
 td {
   padding: 6px 10px;
@@ -1283,18 +1293,27 @@ const PROJECTS = {
   // customer3: { name:'Customer 3', grouping:['function'], planning:'', master:'', milestones:'' },
 };
 
+// ── UNIFIED APPLICATION STATE ────────────────────────────────────────────
+// Step 2 of the state-consolidation pass: every module-level mutable global
+// that used to live as its own `let X` now lives as a property on
+// App.state instead. This is a pure 1:1 rename — no behaviour change, no
+// caching layer (that's Step 3, deliberately not done here). Every prior
+// `X` read/write below is now `App.state.X`; nothing about WHEN or WHY a
+// value changes was touched, only WHERE it's stored.
+const App = { state: {} };
+
 // ── Active project state ──────────────────────────────────────────────────
 // Reads the last-used project from localStorage so re-opening the app
 // automatically restores the user's previous context.
 const LS_KEY = 'rasic_active_project';
-let activeProjectId = (function() {
+App.state.activeProjectId = (function() {
   const saved = localStorage.getItem(LS_KEY);
   // Only restore if the saved key still exists in PROJECTS.
   return (saved && PROJECTS[saved]) ? saved : Object.keys(PROJECTS)[0];
 })();
 
 // Convenience getter — every URL reference in the app goes through this.
-function proj()         { return PROJECTS[activeProjectId]; }
+function proj()         { return PROJECTS[App.state.activeProjectId]; }
 function SHEET_CSV_URL()      { return proj().planning   || ''; }
 function MASTER_SHEET_CSV_URL(){ return proj().master     || ''; }
 function MILESTONES_CSV_URL() { return proj().milestones || ''; }
@@ -1397,19 +1416,19 @@ const DEMO_TASKS = [
   {func:"Regulatory and Statutory Approvals",activity:"Consent for Production",start:"2026-03-20",end:"2026-04-30",owner:"Palani",status:"",phase:"Phase 1"},
 ];
 
-let allTasks = [];
-let masterTasks = [];
-let executionTasks = [];
-let executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
-let masterSheetLoadError = '';
-let milestoneSheetLoadError = '';
-let usingDemo = false;
-let viewMode = 'planning';
+App.state.allTasks = [];
+App.state.masterTasks = [];
+App.state.executionTasks = [];
+App.state.executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
+App.state.masterSheetLoadError = '';
+App.state.milestoneSheetLoadError = '';
+App.state.usingDemo = false;
+App.state.viewMode = 'planning';
 // Holds the last rendered task array so the drawer can access it by row index
-let _lastRenderedTasks = [];
+App.state._lastRenderedTasks = [];
 // Unfiltered task set for the active project (before func/phase/owner
 // filters) — lets the column picker always show every available column.
-let _lastFullTaskSet = [];
+App.state._lastFullTaskSet = [];
 
 function syncViewToggle() {
   const btn = document.getElementById('viewToggle');
@@ -1417,7 +1436,7 @@ function syncViewToggle() {
   // Hide the planning/execution toggle for projects that use a custom column layout
   if (proj().customTable) { btn.style.display = 'none'; return; }
   btn.style.display = '';
-  const isExecution = viewMode === 'execution';
+  const isExecution = App.state.viewMode === 'execution';
   btn.textContent = isExecution ? 'planning view' : 'execution view';
   btn.title = isExecution ? 'show current planning gantt view' : 'show execution tracking view';
   btn.classList.toggle('active-view', isExecution);
@@ -1430,7 +1449,7 @@ function syncViewToggle() {
 // (the view that carries the rich merged column set) — Planning View's
 // fixed RASIC columns are untouched.
 function columnPickerAvailable() {
-  return !!proj().customTable || (!!proj().columnPicker && viewMode === 'execution');
+  return !!proj().customTable || (!!proj().columnPicker && App.state.viewMode === 'execution');
 }
 
 function syncColumnPickerVisibility() {
@@ -1461,10 +1480,10 @@ function toggleCompactHeader() {
 })();
 
 function toggleViewMode() {
-  viewMode = viewMode === 'planning' ? 'execution' : 'planning';
+  App.state.viewMode = App.state.viewMode === 'planning' ? 'execution' : 'planning';
   // Reset owner filter so an execution-view "responsible" name doesn't bleed
   // into planning-view owner filtering and vice-versa.
-  activeOwner = '';
+  App.state.activeOwner = '';
   const ownerSel = document.getElementById('ownerFilter');
   if (ownerSel) ownerSel.value = '';
   syncViewToggle();
@@ -1473,27 +1492,27 @@ function toggleViewMode() {
 }
 
 // ── DASHBOARD VIEW TOGGLE ──────────────────────────────────────────────────
-let dashboardActive = false;
+App.state.dashboardActive = false;
 
 function syncDashboardToggle() {
   const btn = document.getElementById('dashboardToggle');
   if (!btn) return;
-  btn.classList.toggle('active-view', dashboardActive);
-  btn.title = dashboardActive ? 'return to gantt grid view' : 'show executive health dashboard';
+  btn.classList.toggle('active-view', App.state.dashboardActive);
+  btn.title = App.state.dashboardActive ? 'return to gantt grid view' : 'show executive health dashboard';
 }
 
 function toggleDashboardMode() {
-  dashboardActive = !dashboardActive;
+  App.state.dashboardActive = !App.state.dashboardActive;
   syncDashboardToggle();
   applyDashboardVisibility();
-  if (dashboardActive) renderDashboard();
+  if (App.state.dashboardActive) renderDashboard();
 }
 
 function applyDashboardVisibility() {
   const tableWrap = document.getElementById('table-wrap');
   const zoomBar = document.getElementById('zoom-bar');
   const dashWrap = document.getElementById('dashboard-wrap');
-  if (dashboardActive) {
+  if (App.state.dashboardActive) {
     if (tableWrap) tableWrap.style.display = 'none';
     if (zoomBar) zoomBar.style.display = 'none';
     if (dashWrap) dashWrap.style.display = 'block';
@@ -1529,10 +1548,10 @@ function buildMasterTaskMap(rows) {
 }
 
 function syncExecutionTasks() {
-  const masterMap = buildMasterTaskMap(masterTasks);
+  const masterMap = buildMasterTaskMap(App.state.masterTasks);
   let matched = 0;
 
-  executionTasks = (allTasks || []).map(task => {
+  App.state.executionTasks = (App.state.allTasks || []).map(task => {
     const master = masterMap.get(taskMergeKey(task)) || null;
     if (master) matched++;
 
@@ -1560,15 +1579,15 @@ function syncExecutionTasks() {
     };
   });
 
-  const planningKeys = new Set((allTasks || []).map(taskMergeKey));
-  const unmatchedMaster = (masterTasks || []).filter(row => !planningKeys.has(taskMergeKey(row))).length;
-  executionMergeStats = {
-    total: executionTasks.length,
+  const planningKeys = new Set((App.state.allTasks || []).map(taskMergeKey));
+  const unmatchedMaster = (App.state.masterTasks || []).filter(row => !planningKeys.has(taskMergeKey(row))).length;
+  App.state.executionMergeStats = {
+    total: App.state.executionTasks.length,
     matched,
-    unmatchedPlanning: executionTasks.length - matched,
+    unmatchedPlanning: App.state.executionTasks.length - matched,
     unmatchedMaster,
   };
-  console.log('[EXECUTION] Merge stats:', executionMergeStats);
+  console.log('[EXECUTION] Merge stats:', App.state.executionMergeStats);
 
   // ── DIAGNOSTIC ONLY — does not alter parsing, merging, or rendering ────────
   // Flags any merged execution date that falls outside a sane project window
@@ -1578,7 +1597,7 @@ function syncExecutionTasks() {
   // confirmed and fixed at the source.
   const SANITY_MIN_YEAR = 2023, SANITY_MAX_YEAR = 2030;
   const suspicious = [];
-  executionTasks.forEach(t => {
+  App.state.executionTasks.forEach(t => {
     ['startDate', 'plannedEndDate', 'revisedEndDate', 'actualEndDate'].forEach(f => {
       const raw = t[f];
       if (!raw) return;
@@ -2002,14 +2021,14 @@ function parseMasterCSV(text) {
 // Incremented every time switchProject() or loadData() runs. Background async
 // loaders (master sheet, milestones) capture the epoch at the start of their
 // fetch and bail out silently if it has changed by the time the response lands.
-let _loadEpoch = 0;
+App.state._loadEpoch = 0;
 
 async function loadMasterSheetData() {
-  const epoch = _loadEpoch;
+  const epoch = App.state._loadEpoch;
   const masterUrl = MASTER_SHEET_CSV_URL();
   if (!masterUrl) {
-    masterTasks = [];
-    masterSheetLoadError = '';
+    App.state.masterTasks = [];
+    App.state.masterSheetLoadError = '';
     return;
   }
 
@@ -2018,19 +2037,19 @@ async function loadMasterSheetData() {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
-    if (_loadEpoch !== epoch) return;  // project switched while fetching — discard
+    if (App.state._loadEpoch !== epoch) return;  // project switched while fetching — discard
     const parsed = parseMasterCSV(text);
     if (!parsed) throw new Error('could not parse Master Sheet');
-    masterTasks = parsed;
-    masterSheetLoadError = '';
+    App.state.masterTasks = parsed;
+    App.state.masterSheetLoadError = '';
     syncExecutionTasks();
-    if (viewMode === 'execution' && allTasks.length) renderAll();
+    if (App.state.viewMode === 'execution' && App.state.allTasks.length) renderAll();
   } catch (e) {
-    if (_loadEpoch !== epoch) return;
-    masterTasks = [];
-    masterSheetLoadError = e.message;
+    if (App.state._loadEpoch !== epoch) return;
+    App.state.masterTasks = [];
+    App.state.masterSheetLoadError = e.message;
     syncExecutionTasks();
-    if (viewMode === 'execution' && allTasks.length) renderAll();
+    if (App.state.viewMode === 'execution' && App.state.allTasks.length) renderAll();
     console.warn('[MASTER] Background load failed:', e);
   }
 }
@@ -2102,10 +2121,10 @@ function parseMilestonesCSV(text) {
 }
 
 async function loadMilestoneSheetData() {
-  const epoch = _loadEpoch;
+  const epoch = App.state._loadEpoch;
   const msUrl = MILESTONES_CSV_URL();
   if (!msUrl) {
-    milestoneSheetLoadError = '';
+    App.state.milestoneSheetLoadError = '';
     return;
   }
 
@@ -2114,18 +2133,18 @@ async function loadMilestoneSheetData() {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
-    if (_loadEpoch !== epoch) return;  // project switched while fetching — discard
+    if (App.state._loadEpoch !== epoch) return;  // project switched while fetching — discard
     const parsed = parseMilestonesCSV(text);
     if (!parsed) throw new Error('could not parse MILESTONES sheet');
-    milestones = parsed;
-    milestoneSheetLoadError = '';
+    App.state.milestones = parsed;
+    App.state.milestoneSheetLoadError = '';
     renderMilestoneList();
     // Use renderAll (not renderTable) so the milestone gate markers refresh
     // correctly regardless of whether planning, execution, or dashboard is active.
-    if (allTasks.length) renderAll();
+    if (App.state.allTasks.length) renderAll();
   } catch (e) {
-    if (_loadEpoch !== epoch) return;
-    milestoneSheetLoadError = e.message;
+    if (App.state._loadEpoch !== epoch) return;
+    App.state.milestoneSheetLoadError = e.message;
     console.warn('[MILESTONES] Background load failed:', e);
   }
 }
@@ -2143,26 +2162,26 @@ function debugTasks(tasks) {
 // Cancels in-flight fetches from the previous project when the user switches
 // rapidly. Prevents stale data from a slow network response landing in the
 // wrong project's state. Each loadData() call gets a fresh controller.
-let _loadController = null;
+App.state._loadController = null;
 
 // ── LOAD ──────────────────────────────────────────────────────────────────────
 async function loadData() {
   // Cancel any fetch still running from a prior loadData() call.
-  if (_loadController) _loadController.abort();
-  _loadController = new AbortController();
-  const signal = _loadController.signal;
+  if (App.state._loadController) App.state._loadController.abort();
+  App.state._loadController = new AbortController();
+  const signal = App.state._loadController.signal;
 
   // Increment epoch — background loaders (master, milestones) capture this and
   // discard their results if it has changed by the time their fetch resolves.
-  _loadEpoch++;
+  App.state._loadEpoch++;
   const sheetUrl = SHEET_CSV_URL();
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('table-wrap').style.display = 'none';
   document.getElementById('error-msg').style.display = 'none';
 
   // Reset all data so stale info from a previous project never bleeds through.
-  allTasks = []; masterTasks = []; executionTasks = []; milestones = [];
-  executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
+  App.state.allTasks = []; App.state.masterTasks = []; App.state.executionTasks = []; App.state.milestones = [];
+  App.state.executionMergeStats = { total: 0, matched: 0, unmatchedPlanning: 0, unmatchedMaster: 0 };
   renderMilestoneList();
 
   // Fire background loads for the active project's optional sheets.
@@ -2174,7 +2193,7 @@ async function loadData() {
   document.title = proj().name + ' — RASIC Gantt';
 
   if (!sheetUrl) {
-    usingDemo = true; allTasks = DEMO_TASKS;
+    App.state.usingDemo = true; App.state.allTasks = DEMO_TASKS;
     syncExecutionTasks();
     setStatus('demo mode', false);
     document.getElementById('last-updated').textContent = 'demo data — add a Planning Sheet URL to PROJECTS config';
@@ -2190,16 +2209,16 @@ async function loadData() {
     const parsed = parseCSV(text);
     if (!parsed) throw new Error('could not parse sheet — open browser console (F12) to see which headers were detected. Required: Activity/Task column + Start/End date columns');
     debugTasks(parsed);
-    allTasks = parsed;
+    App.state.allTasks = parsed;
     syncExecutionTasks();
-    usingDemo = false;
+    App.state.usingDemo = false;
     setStatus('live', true);
     document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
     renderAll();
   } catch(e) {
     if (e.name === 'AbortError') return;  // intentional cancel — don't show error
     console.warn('Sheet load failed:', e);
-    allTasks = DEMO_TASKS; usingDemo = true;
+    App.state.allTasks = DEMO_TASKS; App.state.usingDemo = true;
     syncExecutionTasks();
     setStatus('sheet error — showing demo', false);
     document.getElementById('last-updated').textContent = 'could not load sheet: ' + e.message;
@@ -2222,20 +2241,20 @@ function setStatus(text, live) {
 // new project's URLs automatically.
 function switchProject(projectId) {
   if (!PROJECTS[projectId]) return;         // guard against stale option values
-  if (projectId === activeProjectId) return; // no-op if already selected
+  if (projectId === App.state.activeProjectId) return; // no-op if already selected
 
-  activeProjectId = projectId;
+  App.state.activeProjectId = projectId;
   localStorage.setItem(LS_KEY, projectId);
 
   // Reset view state so the new project starts in a clean slate.
-  viewMode = 'planning';
-  dashboardActive = false;
-  activeOwner = '';
-  collapsedGroups.clear();
-  pvhFuncSort = null;
-  taskMilestones.clear();
-  zoomMode = 'overview';
-  zoomMonth = null;
+  App.state.viewMode = 'planning';
+  App.state.dashboardActive = false;
+  App.state.activeOwner = '';
+  App.state.collapsedGroups.clear();
+  App.state.pvhFuncSort = null;
+  App.state.taskMilestones.clear();
+  App.state.zoomMode = 'overview';
+  App.state.zoomMonth = null;
 
   syncViewToggle();
   syncDashboardToggle();
@@ -2253,9 +2272,9 @@ function switchProject(projectId) {
 
 // ── MILESTONES — sheet-driven, read-only in app ───────────────────────────────
 // Initialized empty; populated by loadMilestoneSheetData() from the MILESTONES tab.
-let milestones = [];
+App.state.milestones = [];
 
-function getMilestones() { return milestones; }
+function getMilestones() { return App.state.milestones; }
 
 // addMilestone / deleteMilestone / editMilestone removed — milestones are now
 // sheet-driven (MILESTONES tab). Edit the Google Sheet directly.
@@ -2269,7 +2288,7 @@ function renderMilestoneList() {
 
   if (!ms.length) {
     list.innerHTML = `<span style="font-size:10px;font-family:var(--mono);color:var(--text3);font-style:italic">
-      ${milestoneSheetLoadError ? '⚠ ' + escapeHTML(milestoneSheetLoadError) : 'loading milestones from sheet…'}
+      ${App.state.milestoneSheetLoadError ? '⚠ ' + escapeHTML(App.state.milestoneSheetLoadError) : 'loading milestones from sheet…'}
     </span>`;
     return;
   }
@@ -2294,20 +2313,20 @@ function renderMilestoneList() {
 }
 
 // ── CONFIGURABLE GROUPING HIERARCHY ENGINE ──────────────────────────────────
-// collapsedGroups stores the path of any group node that is collapsed.
+// App.state.collapsedGroups stores the path of any group node that is collapsed.
 // For Array (single-level), paths are just function names — same as the old
 // collapsedFuncs keys, so behaviour is unchanged.
 // For PVH (two-level), part paths are e.g. "DAMPER", function paths are
 // e.g. "DAMPER||Procurement" (pipe separator — safe in any CSV data).
-const collapsedGroups = new Set();
+App.state.collapsedGroups = new Set();
 
 // ── Function-column sort (flatRows projects only, e.g. PVH) ────────────────
 // null = untouched spreadsheet order (default). 'asc'/'desc' = stable sort
 // by Function value within each Part block, applied only when the user
 // clicks the Function column header — never on by default.
-let pvhFuncSort = null;
+App.state.pvhFuncSort = null;
 function toggleFunctionColumnSort() {
-  pvhFuncSort = pvhFuncSort === null ? 'asc' : pvhFuncSort === 'asc' ? 'desc' : null;
+  App.state.pvhFuncSort = App.state.pvhFuncSort === null ? 'asc' : App.state.pvhFuncSort === 'asc' ? 'desc' : null;
   renderAll();
 }
 
@@ -2333,11 +2352,11 @@ function saveColumnVisibility(projectId, visibleSet) {
 }
 
 // Per-project Set of visible column keys, lazily initialised on first render.
-let columnVisibility = null;
-let columnVisibilityProjectId = null;
+App.state.columnVisibility = null;
+App.state.columnVisibilityProjectId = null;
 
 function ensureColumnVisibilityLoaded() {
-  if (columnVisibilityProjectId !== activeProjectId) {
+  if (App.state.columnVisibilityProjectId !== App.state.activeProjectId) {
     const configured = proj().defaultVisibleColumns;
     // No curated default list configured for this project → fall back to
     // showing every column the parser found (preserves Array's existing
@@ -2345,11 +2364,11 @@ function ensureColumnVisibilityLoaded() {
     // still letting the user hide columns from here on).
     const defaults = (configured && configured.length)
       ? configured
-      : deriveAllColumns(_lastFullTaskSet || []).map(c => c.key);
-    columnVisibility = loadColumnVisibility(activeProjectId, defaults);
-    columnVisibilityProjectId = activeProjectId;
+      : deriveAllColumns(App.state._lastFullTaskSet || []).map(c => c.key);
+    App.state.columnVisibility = loadColumnVisibility(App.state.activeProjectId, defaults);
+    App.state.columnVisibilityProjectId = App.state.activeProjectId;
   }
-  return columnVisibility;
+  return App.state.columnVisibility;
 }
 
 function toggleColumnVisibility(key) {
@@ -2360,7 +2379,7 @@ function toggleColumnVisibility(key) {
   } else {
     vis.add(key);
   }
-  saveColumnVisibility(activeProjectId, vis);
+  saveColumnVisibility(App.state.activeProjectId, vis);
   renderAll();
   // Keep the panel's checkboxes in sync if it's still open.
   const panel = document.getElementById('columnPickerPanel');
@@ -2386,7 +2405,7 @@ document.addEventListener('click', function(e) {
 function renderColumnPickerPanel() {
   const panel = document.getElementById('columnPickerPanel');
   if (!panel || !columnPickerAvailable()) return;
-  const allCols = deriveAllColumns(_lastFullTaskSet || []);
+  const allCols = deriveAllColumns(App.state._lastFullTaskSet || []);
   const vis = ensureColumnVisibilityLoaded();
   panel.innerHTML = `
     <div class="col-picker-label">Visible columns</div>
@@ -2475,10 +2494,10 @@ function deriveAllColumns(tasks) {
 // Toggle a group path. Full re-render (not DOM walk) — required for multi-level
 // nesting because hiding a parent must also hide all descendant rows.
 function toggleGroup(groupPath) {
-  if (collapsedGroups.has(groupPath)) {
-    collapsedGroups.delete(groupPath);
+  if (App.state.collapsedGroups.has(groupPath)) {
+    App.state.collapsedGroups.delete(groupPath);
   } else {
-    collapsedGroups.add(groupPath);
+    App.state.collapsedGroups.add(groupPath);
   }
   renderAll();
 }
@@ -2603,15 +2622,15 @@ function ragClass(rag) {
 
 
 // ── OWNER FILTER — global state, pill-click toggle ───────────────────────────
-let activeOwner = '';
+App.state.activeOwner = '';
 
 function filterByOwner(name) {
-  activeOwner = (activeOwner === name) ? '' : name;
+  App.state.activeOwner = (App.state.activeOwner === name) ? '' : name;
   const sel = document.getElementById('ownerFilter');
-  if (sel) sel.value = activeOwner;
+  if (sel) sel.value = App.state.activeOwner;
   // Route through renderAll so execution view, planning view, and dashboard
   // all respond correctly regardless of which mode is currently active.
-  if (dashboardActive) renderDashboard();
+  if (App.state.dashboardActive) renderDashboard();
   else renderAll();
 }
 
@@ -2626,17 +2645,17 @@ function filterByFunctionQuick(name) {
   const sel = document.getElementById('funcFilter');
   if (!sel) return;
   sel.value = (sel.value === name) ? '' : name;
-  if (dashboardActive) renderDashboard();
+  if (App.state.dashboardActive) renderDashboard();
   else renderAll();
 }
 
 // ── TASK-LINKED MILESTONES — per-row diamond at task end date ─────────────────
 // Key format: "func::activity" — stable across re-renders
-const taskMilestones = new Set();
+App.state.taskMilestones = new Set();
 
 function toggleTaskMilestone(key, btnEl) {
-  if (taskMilestones.has(key)) {
-    taskMilestones.delete(key);
+  if (App.state.taskMilestones.has(key)) {
+    App.state.taskMilestones.delete(key);
     btnEl.classList.remove('ms-active');
     btnEl.title = 'Mark as milestone';
     // Hide diamond in this row
@@ -2650,7 +2669,7 @@ function toggleTaskMilestone(key, btnEl) {
       }
     }
   } else {
-    taskMilestones.add(key);
+    App.state.taskMilestones.add(key);
     btnEl.classList.add('ms-active');
     btnEl.title = 'Remove milestone';
     // Show diamond in this row
@@ -2668,9 +2687,9 @@ function toggleTaskMilestone(key, btnEl) {
 
 // ── RENDER ALL ────────────────────────────────────────────────────────────────
 function renderAll() {
-  const sourceTasks = viewMode === 'execution' ? executionTasks : allTasks;
+  const sourceTasks = App.state.viewMode === 'execution' ? App.state.executionTasks : App.state.allTasks;
   const funcs  = [...new Set(sourceTasks.map(t=>t.func).filter(Boolean))];
-  const owners = [...new Set(sourceTasks.map(t=>viewMode === 'execution' ? t.responsible : t.owner).filter(Boolean))].sort();
+  const owners = [...new Set(sourceTasks.map(t=>App.state.viewMode === 'execution' ? t.responsible : t.owner).filter(Boolean))].sort();
   const accountables = [...new Set(sourceTasks.map(t=>t.accountable).filter(Boolean))].sort();
   const statuses = [...new Set(sourceTasks.map(t=>t.executionStatus).filter(Boolean))].sort();
   const priorities = [...new Set(sourceTasks.map(t=>t.priority).filter(Boolean))].sort();
@@ -2684,26 +2703,26 @@ function renderAll() {
   const savedStatus = statusSel ? statusSel.value : '';
   const savedPriority = prioritySel ? prioritySel.value : '';
   funcSel.innerHTML  = '<option value="">all functions</option>'  + funcs.map(f=>`<option value="${f}"${f===savedFunc?' selected':''}>${f}</option>`).join('');
-  ownerSel.innerHTML = `<option value="">${viewMode === 'execution' ? 'all responsible' : 'all owners'}</option>` + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
+  ownerSel.innerHTML = `<option value="">${App.state.viewMode === 'execution' ? 'all responsible' : 'all owners'}</option>` + owners.map(o=>`<option value="${o}"${o===savedOwner?' selected':''}>${o}</option>`).join('');
   if (accountableSel) {
-    accountableSel.style.display = viewMode === 'execution' ? '' : 'none';
+    accountableSel.style.display = App.state.viewMode === 'execution' ? '' : 'none';
     accountableSel.innerHTML = '<option value="">all accountable</option>' + accountables.map(a=>`<option value="${a}"${a===savedAccountable?' selected':''}>${a}</option>`).join('');
   }
   if (statusSel) {
-    statusSel.style.display = viewMode === 'execution' ? '' : 'none';
+    statusSel.style.display = App.state.viewMode === 'execution' ? '' : 'none';
     statusSel.innerHTML = '<option value="">all status</option>' + statuses.map(s=>`<option value="${s}"${s===savedStatus?' selected':''}>${s}</option>`).join('');
   }
   if (prioritySel) {
-    prioritySel.style.display = viewMode === 'execution' ? '' : 'none';
+    prioritySel.style.display = App.state.viewMode === 'execution' ? '' : 'none';
     prioritySel.innerHTML = '<option value="">all priority</option>' + priorities.map(p=>`<option value="${p}"${p===savedPriority?' selected':''}>${p}</option>`).join('');
   }
   applyDashboardVisibility();
-  if (dashboardActive) renderDashboard();
+  if (App.state.dashboardActive) renderDashboard();
   else if (proj().customTable) renderCustomColumnsTable();
   else renderTable();
 }
-let zoomMode = 'overview';
-let zoomMonth = null;
+App.state.zoomMode = 'overview';
+App.state.zoomMonth = null;
 
 function escapeHTML(value) {
   return (value == null ? '' : String(value)).replace(/[&<>"']/g, ch => ({
@@ -2738,12 +2757,12 @@ function renderExecutionTable() {
   const selAccountable = document.getElementById('accountableFilter').value;
   const selStatus = document.getElementById('statusFilter').value;
   const selPriority = document.getElementById('priorityFilter').value;
-  if (selResponsible !== activeOwner) activeOwner = selResponsible;
+  if (selResponsible !== App.state.activeOwner) App.state.activeOwner = selResponsible;
 
-  let tasks = executionTasks.filter(t => {
+  let tasks = App.state.executionTasks.filter(t => {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
-    if (activeOwner && t.responsible !== activeOwner) return false;
+    if (App.state.activeOwner && t.responsible !== App.state.activeOwner) return false;
     if (selAccountable && t.accountable !== selAccountable) return false;
     if (selStatus && t.executionStatus !== selStatus) return false;
     if (selPriority && t.priority !== selPriority) return false;
@@ -2756,10 +2775,10 @@ function renderExecutionTable() {
   });
 
   // ── Shared column engine (same component PVH's ⚙ columns uses) ──────────
-  // _lastFullTaskSet is the UNFILTERED set, so the picker always lists every
+  // App.state._lastFullTaskSet is the UNFILTERED set, so the picker always lists every
   // column the sheet has, regardless of the active func/phase/owner filter.
-  _lastFullTaskSet = executionTasks;
-  const allColsExec = deriveAllColumns(executionTasks);
+  App.state._lastFullTaskSet = App.state.executionTasks;
+  const allColsExec = deriveAllColumns(App.state.executionTasks);
   const visibleKeysExec = ensureColumnVisibilityLoaded();
   const allColKeysExec = new Set(allColsExec.map(c => c.key));
   const cols = allColsExec.filter(c => visibleKeysExec.has(c.key) || c.key === 'activity');
@@ -2771,11 +2790,11 @@ function renderExecutionTable() {
   const doneCount  = tasks.filter(t => t._rag === 'green').length;
   const ph1        = tasks.filter(t => t.phase === 'Phase 1').length;
 
-  const matchedBadge = executionMergeStats.total > 0
-    ? `<div class="stat"><div class="stat-val" style="color:var(--rag-green)">${executionMergeStats.matched}</div><div class="stat-lbl">master matched</div></div>
-       <div class="stat"><div class="stat-val" style="color:var(--text3)">${executionMergeStats.unmatchedPlanning}</div><div class="stat-lbl">no master data</div></div>`
+  const matchedBadge = App.state.executionMergeStats.total > 0
+    ? `<div class="stat"><div class="stat-val" style="color:var(--rag-green)">${App.state.executionMergeStats.matched}</div><div class="stat-lbl">master matched</div></div>
+       <div class="stat"><div class="stat-val" style="color:var(--text3)">${App.state.executionMergeStats.unmatchedPlanning}</div><div class="stat-lbl">no master data</div></div>`
     : '';
-  const masterErrBadge = masterSheetLoadError
+  const masterErrBadge = App.state.masterSheetLoadError
     ? `<div class="stat" style="border-color:rgba(247,95,95,0.35)"><div class="stat-val" style="font-size:10px;color:var(--rag-red)">⚠</div><div class="stat-lbl" style="color:var(--rag-red)">master sheet error</div></div>`
     : '';
 
@@ -2808,9 +2827,9 @@ function renderExecutionTable() {
   const today = new Date(); today.setHours(0,0,0,0);
   let minD, maxD;
 
-  if (zoomMode === 'month' && zoomMonth) {
-    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
-    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0);
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    minD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), 1);
+    maxD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0);
     tasks = tasks.filter(t => {
       const s = parseLocalDate(t._execStart), e = parseLocalDate(t._execEnd);
       return s && e && s <= maxD && e >= minD;
@@ -2827,10 +2846,10 @@ function renderExecutionTable() {
   const todayPct = pctOf(today);
 
   let majorTicks = [];
-  if (zoomMode === 'month' && zoomMonth) {
-    const daysInMonth = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    const daysInMonth = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0).getDate();
     for (let d = 1; d <= daysInMonth; d++) {
-      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      const dt = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), d);
       const p = pctOf(dt);
       majorTicks.push({ label: String(d), p, bold: dt.getDay() === 1 });
     }
@@ -2851,7 +2870,7 @@ function renderExecutionTable() {
   }).filter(Boolean);
 
   let zoomBarHTML = '';
-  if (zoomMode === 'overview') {
+  if (App.state.zoomMode === 'overview') {
     const months = [];
     let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
     const endMo = new Date(Math.max(...allD));
@@ -2865,16 +2884,16 @@ function renderExecutionTable() {
       }).join('')}
     </div>`;
   } else {
-    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    const mLabel = App.state.zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
     zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
       <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">overview</button>
       <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} - day-level view</span>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">prev</button>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">prev</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next</button>
     </div>`;
   }
 
-  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+  const ticksHTML = `<div style="position:relative;height:${App.state.zoomMode==='month'?'22px':'20px'};min-width:${App.state.zoomMode==='month'?'600px':'400px'}">
     ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
   </div>`;
 
@@ -2923,7 +2942,7 @@ function renderExecutionTable() {
     </div>` : '';
 
   // Store for drawer access
-  _lastRenderedTasks = tasks;
+  App.state._lastRenderedTasks = tasks;
 
   // ── Build grouping tree (configurable hierarchy) ─────────────────────────
   const grouping = proj().grouping || ['function'];
@@ -2935,7 +2954,7 @@ function renderExecutionTable() {
   <thead>
     <tr>
       ${cols.map(c => `<th class="${c.extra ? 'extra-col-th' : ''}" style="min-width:${c.minWidth||80}px" ${c.extra?'title="Project-specific field"':''}>${escapeHTML(c.label)}</th>`).join('')}
-      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
+      <th style="min-width:${App.state.zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
 
@@ -2953,7 +2972,7 @@ function renderExecutionTable() {
     let out = '';
     nodes.forEach(node => {
       const isLeafGroup = node.isLeafGroup; // set by buildGroupTree using depth arithmetic
-      const isCollapsed = collapsedGroups.has(node.path);
+      const isCollapsed = App.state.collapsedGroups.has(node.path);
       const childrenHidden = isParentHidden || isCollapsed;
 
       const rc = { red:0, amber:0, green:0 };
@@ -3040,9 +3059,9 @@ function renderExecutionTable() {
           const ragLabel = {red:'Overdue',amber:'At Risk',green:'Completed',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
           const statusText = t.executionStatus || ragLabel;
           const tip = `${t.activity} | ${fmt(t._execStart)} -> ${fmt(t._execEnd)}${t.responsible?' | '+t.responsible:''}`;
-          const responsibleActive = t.responsible && t.responsible === activeOwner ? ' active-owner' : '';
+          const responsibleActive = t.responsible && t.responsible === App.state.activeOwner ? ' active-owner' : '';
           const msKey = `${t.func}::${t.activity}`;
-          const isTaskMs = taskMilestones.has(msKey);
+          const isTaskMs = App.state.taskMilestones.has(msKey);
           if (hasDates) {
             const endPct = pctOf(eDate < minD ? minD : eDate > maxD ? maxD : eDate);
             taskDiamond = `<div class="task-ms-diamond${isTaskMs?' task-ms-diamond-hover':''}" style="display:${isTaskMs?'':'none'};position:absolute;left:${endPct.toFixed(2)}%;top:50%;transform:translate(-50%,-50%) rotate(45deg);width:9px;height:9px;background:rgba(255,220,100,0.95);z-index:10;${isTaskMs?'pointer-events:auto;':'pointer-events:none;'}box-shadow:0 0 7px rgba(255,220,100,0.55);"
@@ -3091,7 +3110,7 @@ function renderExecutionTable() {
             }
           };
 
-          const execTaskIdx = _lastRenderedTasks.indexOf(t);
+          const execTaskIdx = App.state._lastRenderedTasks.indexOf(t);
           const barFillHTML = (hasDates && plannedSeg)
             ? `<div class="bar-fill ${rClass}" style="left:${plannedSeg.left.toFixed(2)}%;width:${plannedSeg.width.toFixed(2)}%;background:${color};opacity:0.88;z-index:3" title="${escapeHTML(tip)}"></div>
                ${extensionSeg ? `<div class="bar-fill" style="left:${extensionSeg.left.toFixed(2)}%;width:${extensionSeg.width.toFixed(2)}%;background:rgba(240,146,74,0.58);opacity:0.78;z-index:4" title="Lead time extension: ${escapeHTML(fmt(t.plannedEndDate))} → ${escapeHTML(fmt(t.revisedEndDate))}"></div>` : ''}`
@@ -3172,15 +3191,15 @@ function resolveColumnValue(task, key) {
 }
 
 // Renders the custom column table for projects with proj().customTable = true.
-// Always uses executionTasks (merged planning + master) so every defined
+// Always uses App.state.executionTasks (merged planning + master) so every defined
 // column — including master-sheet fields like responsible/accountable — is
 // available even when only the planning sheet has loaded (fields will be '').
 function renderCustomColumnsTable() {
   // Full, unfiltered task set — used to derive the complete column list so
   // the column picker always shows every available field regardless of the
   // current func/phase/owner filter state.
-  _lastFullTaskSet = executionTasks;
-  const allCols = deriveAllColumns(executionTasks);
+  App.state._lastFullTaskSet = App.state.executionTasks;
+  const allCols = deriveAllColumns(App.state.executionTasks);
   const visibleKeys = ensureColumnVisibilityLoaded();
   // Only show columns that are (a) marked visible AND (b) actually exist in
   // the derived set (guards against a stale localStorage key referencing a
@@ -3195,13 +3214,13 @@ function renderCustomColumnsTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
-  if (selOwner !== activeOwner) activeOwner = selOwner;
+  if (selOwner !== App.state.activeOwner) App.state.activeOwner = selOwner;
 
-  let tasks = executionTasks.filter(t => {
+  let tasks = App.state.executionTasks.filter(t => {
     if (selFunc  && t.func !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
     const owner = t.responsible || t.owner;
-    if (activeOwner && owner !== activeOwner) return false;
+    if (App.state.activeOwner && owner !== App.state.activeOwner) return false;
     return true;
   }).map(t => {
     const execStart = t.startDate || t.start;
@@ -3209,7 +3228,7 @@ function renderCustomColumnsTable() {
     return { ...t, _execStart: execStart, _execEnd: execEnd, _rag: executionRagStatus(t) };
   });
 
-  _lastRenderedTasks = tasks;
+  App.state._lastRenderedTasks = tasks;
 
   // ── Stats bar ──────────────────────────────────────────────────────────────
   const rc = { red:0, amber:0, green:0 };
@@ -3236,9 +3255,9 @@ function renderCustomColumnsTable() {
 
   const today = new Date(); today.setHours(0,0,0,0);
   let minD, maxD;
-  if (zoomMode === 'month' && zoomMonth) {
-    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
-    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0);
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    minD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), 1);
+    maxD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0);
     tasks = tasks.filter(t => { const s = parseLocal(t._execStart), e = parseLocal(t._execEnd); return s && e && s <= maxD && e >= minD; });
   } else {
     const gMin = new Date(Math.min(...allD)), gMax = new Date(Math.max(...allD));
@@ -3251,10 +3270,10 @@ function renderCustomColumnsTable() {
 
   // ── Tick marks ─────────────────────────────────────────────────────────────
   let majorTicks = [];
-  if (zoomMode === 'month' && zoomMonth) {
-    const dim = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    const dim = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0).getDate();
     for (let d = 1; d <= dim; d++) {
-      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      const dt = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), d);
       majorTicks.push({ label: String(d), p: pctOf(dt), bold: dt.getDay() === 1 });
     }
   } else {
@@ -3265,13 +3284,13 @@ function renderCustomColumnsTable() {
       td2.setMonth(td2.getMonth()+1);
     }
   }
-  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+  const ticksHTML = `<div style="position:relative;height:${App.state.zoomMode==='month'?'22px':'20px'};min-width:${App.state.zoomMode==='month'?'600px':'400px'}">
     ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
   </div>`;
 
   // ── Zoom bar ───────────────────────────────────────────────────────────────
   let zoomBarHTML = '';
-  if (zoomMode === 'overview') {
+  if (App.state.zoomMode === 'overview') {
     const months = [];
     let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
     const endMo = new Date(Math.max(...allD));
@@ -3285,12 +3304,12 @@ function renderCustomColumnsTable() {
       }).join('')}
     </div>`;
   } else {
-    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    const mLabel = App.state.zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
     zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
       <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">← overview</button>
       <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} — day-level view</span>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
     </div>`;
   }
 
@@ -3298,7 +3317,7 @@ function renderCustomColumnsTable() {
   const grouping = proj().grouping || ['function'];
   const isFlatRows = !!proj().flatRows;
   const excludedGrpKeys = new Set(grouping.map(k => k.toLowerCase().replace(/[\s_\-\/]+/g, '')));
-  const minTableWidth = cols.reduce((s, c) => s + (c.minWidth || 80), 0) + (zoomMode==='month'?620:460);
+  const minTableWidth = cols.reduce((s, c) => s + (c.minWidth || 80), 0) + (App.state.zoomMode==='month'?620:460);
 
   // flatRows mode (e.g. PVH): group by the single configured key (Part) using
   // a SEQUENTIAL walk that creates a new block whenever the value changes —
@@ -3326,12 +3345,12 @@ function renderCustomColumnsTable() {
     <tr>
       ${cols.map(c => {
         if (c.key === 'function' && isFlatRows) {
-          const arrow = pvhFuncSort === 'asc' ? ' ▲' : pvhFuncSort === 'desc' ? ' ▼' : '';
+          const arrow = App.state.pvhFuncSort === 'asc' ? ' ▲' : App.state.pvhFuncSort === 'desc' ? ' ▼' : '';
           return `<th style="min-width:${c.minWidth||80}px;cursor:pointer;user-select:none" data-action="sort-function-col" title="Click to sort by Function within each Part (does not change grouping)">${escapeHTML(c.label)}${arrow}</th>`;
         }
         return `<th style="min-width:${c.minWidth||80}px">${escapeHTML(c.label)}</th>`;
       }).join('')}
-      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${ticksHTML}</th>
+      <th style="min-width:${App.state.zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${ticksHTML}</th>
     </tr>
   </thead><tbody>`;
 
@@ -3364,8 +3383,8 @@ function renderCustomColumnsTable() {
       : '';
 
     const msKey = `${t.func}::${t.activity}`;
-    const isTaskMs = taskMilestones.has(msKey);
-    const taskIdx = _lastRenderedTasks.indexOf(t);
+    const isTaskMs = App.state.taskMilestones.has(msKey);
+    const taskIdx = App.state._lastRenderedTasks.indexOf(t);
 
     const cellsHTML = cols.map(c => {
       const val = resolveColumnValue(t, c.key);
@@ -3377,7 +3396,7 @@ function renderCustomColumnsTable() {
         return `<td>${val?`<span class="owner-pill${isActiveFunc}" data-action="filter-function-quick" data-func="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
       }
       if (c.key === 'responsible') {
-        const isActive = val && val === activeOwner ? ' active-owner' : '';
+        const isActive = val && val === App.state.activeOwner ? ' active-owner' : '';
         return `<td>${val?`<span class="owner-pill${isActive}" data-action="filter-owner" data-owner="${escapeHTML(val)}" title="click to filter by ${escapeHTML(val)}">${escapeHTML(val)}</span>`:'<span style="color:var(--text3)">-</span>'}</td>`;
       }
       if (c.key === 'status') {
@@ -3401,7 +3420,7 @@ function renderCustomColumnsTable() {
   function buildFlatPartGroups(groups) {
     let out = '';
     groups.forEach(node => {
-      const isCollapsed = collapsedGroups.has(node.path);
+      const isCollapsed = App.state.collapsedGroups.has(node.path);
 
       // Part header — title reads "PART NAME (Supply Model)" only. No
       // metadata chips (Activities/Done/At Risk/Overdue) — the existing
@@ -3426,13 +3445,13 @@ function renderCustomColumnsTable() {
 
       // Activity rows — exact original sheet order, no sub-grouping (unless
       // the user has clicked the Function column header to sort — see
-      // pvhFuncSort below; default is null, i.e. untouched sheet order).
-      const rowsToRender = pvhFuncSort
+      // App.state.pvhFuncSort below; default is null, i.e. untouched sheet order).
+      const rowsToRender = App.state.pvhFuncSort
         ? [...node.tasks].sort((a, b) => {
             const av = (resolveColumnValue(a, 'function') || '').toLowerCase();
             const bv = (resolveColumnValue(b, 'function') || '').toLowerCase();
-            if (av < bv) return pvhFuncSort === 'asc' ? -1 : 1;
-            if (av > bv) return pvhFuncSort === 'asc' ?  1 : -1;
+            if (av < bv) return App.state.pvhFuncSort === 'asc' ? -1 : 1;
+            if (av > bv) return App.state.pvhFuncSort === 'asc' ?  1 : -1;
             return 0; // stable: equal-function rows keep their original relative order
           })
         : node.tasks;
@@ -3446,7 +3465,7 @@ function renderCustomColumnsTable() {
   function buildCustomGroupRows(nodes, isParentHidden) {
     let out = '';
     nodes.forEach(node => {
-      const isCollapsed = collapsedGroups.has(node.path);
+      const isCollapsed = App.state.collapsedGroups.has(node.path);
       const childrenHidden = isParentHidden || isCollapsed;
       const rc2 = { red:0, amber:0, green:0 };
       node.tasks.forEach(t => { if(t._rag) rc2[t._rag] = (rc2[t._rag]||0)+1; });
@@ -3500,7 +3519,7 @@ function renderCustomColumnsTable() {
 }
 
 function renderTable() {
-  if (viewMode === 'execution') {
+  if (App.state.viewMode === 'execution') {
     renderExecutionTable();
     return;
   }
@@ -3508,13 +3527,13 @@ function renderTable() {
   const selFunc  = document.getElementById('funcFilter').value;
   const selPhase = document.getElementById('phaseFilter').value;
   const selOwner = document.getElementById('ownerFilter').value;
-  // Keep activeOwner in sync with dropdown
-  if (selOwner !== activeOwner) activeOwner = selOwner;
+  // Keep App.state.activeOwner in sync with dropdown
+  if (selOwner !== App.state.activeOwner) App.state.activeOwner = selOwner;
 
-  let tasks = allTasks.filter(t => {
+  let tasks = App.state.allTasks.filter(t => {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
-    if (activeOwner && t.owner !== activeOwner) return false;
+    if (App.state.activeOwner && t.owner !== App.state.activeOwner) return false;
     return true;
   });
   // Compute RAG once per task
@@ -3551,9 +3570,9 @@ function renderTable() {
 
   // ── Timeline window ────────────────────────────────────────────────────────
   let minD, maxD;
-  if (zoomMode === 'month' && zoomMonth) {
-    minD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), 1);
-    maxD = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0);
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    minD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), 1);
+    maxD = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0);
     tasks = tasks.filter(t => {
       const s = parseLocal(t.start), e = parseLocal(t.end);
       return s && e && s <= maxD && e >= minD;
@@ -3571,10 +3590,10 @@ function renderTable() {
 
   // ── Ticks ──────────────────────────────────────────────────────────────────
   let majorTicks = [];
-  if (zoomMode === 'month' && zoomMonth) {
-    const daysInMonth = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth()+1, 0).getDate();
+  if (App.state.zoomMode === 'month' && App.state.zoomMonth) {
+    const daysInMonth = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth()+1, 0).getDate();
     for (let d = 1; d <= daysInMonth; d++) {
-      const dt = new Date(zoomMonth.getFullYear(), zoomMonth.getMonth(), d);
+      const dt = new Date(App.state.zoomMonth.getFullYear(), App.state.zoomMonth.getMonth(), d);
       const p = pctOf(dt);
       majorTicks.push({ label: String(d), p, bold: dt.getDay() === 1 });
     }
@@ -3597,7 +3616,7 @@ function renderTable() {
 
   // ── Zoom bar ───────────────────────────────────────────────────────────────
   let zoomBarHTML = '';
-  if (zoomMode === 'overview') {
+  if (App.state.zoomMode === 'overview') {
     const months = [];
     let td3 = new Date(new Date(Math.min(...allD)).getFullYear(), new Date(Math.min(...allD)).getMonth(), 1);
     const endMo = new Date(Math.max(...allD));
@@ -3611,17 +3630,17 @@ function renderTable() {
       }).join('')}
     </div>`;
   } else {
-    const mLabel = zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    const mLabel = App.state.zoomMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
     zoomBarHTML = `<div style="display:flex;align-items:center;gap:10px;padding:6px 28px;border-bottom:1px solid var(--border);background:var(--surface2)">
       <button onclick="drillBack()" style="background:var(--surface);border:1px solid var(--border2);color:var(--accent);font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:4px;cursor:pointer">← overview</button>
       <span style="font-size:11px;font-family:var(--mono);color:var(--text);font-weight:500">${mLabel} — day-level view</span>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
-      <button onclick="drillMonth(new Date(${zoomMonth.getFullYear()},${zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()-1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">‹ prev</button>
+      <button onclick="drillMonth(new Date(${App.state.zoomMonth.getFullYear()},${App.state.zoomMonth.getMonth()+1},1))" style="background:var(--surface);border:1px solid var(--border2);color:var(--text2);font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer">next ›</button>
     </div>`;
   }
 
   // ── Tick row HTML ──────────────────────────────────────────────────────────
-  const ticksHTML = `<div style="position:relative;height:${zoomMode==='month'?'22px':'20px'};min-width:${zoomMode==='month'?'600px':'400px'}">
+  const ticksHTML = `<div style="position:relative;height:${App.state.zoomMode==='month'?'22px':'20px'};min-width:${App.state.zoomMode==='month'?'600px':'400px'}">
     ${majorTicks.map(t=>`<span style="position:absolute;font-size:9px;font-family:var(--mono);color:${t.bold?'var(--text2)':'var(--text3)'};font-weight:${t.bold?'500':'400'};transform:translateX(-50%);left:${t.p.toFixed(2)}%;white-space:nowrap;pointer-events:none">${t.label}</span>`).join('')}
   </div>`;
 
@@ -3684,7 +3703,7 @@ function renderTable() {
     });
   });
   const extraColCount = extraFieldNames.length;
-  _lastRenderedTasks = tasks;
+  App.state._lastRenderedTasks = tasks;
 
   const grouping = proj().grouping || ['function'];
   const tree = buildGroupTree(tasks, grouping);
@@ -3700,7 +3719,7 @@ function renderTable() {
       <th style="min-width:68px">start</th>
       <th style="min-width:68px">end</th>
       ${extraFieldNames.map(n => `<th class="extra-col-th" title="Project-specific field">${escapeHTML(n)}</th>`).join('')}
-      <th style="min-width:${zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
+      <th style="min-width:${App.state.zoomMode==='month'?'600px':'440px'};padding-bottom:0;overflow:visible;position:relative;">${flagsHTML}${ticksHTML}</th>
     </tr>
   </thead><tbody>
   ${milestoneBarHTML}`;
@@ -3710,7 +3729,7 @@ function renderTable() {
     let out = '';
     nodes.forEach(node => {
       const isLeafGroup = node.isLeafGroup; // set by buildGroupTree using depth arithmetic
-      const isCollapsed = collapsedGroups.has(node.path);
+      const isCollapsed = App.state.collapsedGroups.has(node.path);
       const childrenHidden = isParentHidden || isCollapsed;
 
       const rc = { red:0, amber:0, green:0 };
@@ -3779,9 +3798,9 @@ function renderTable() {
             : '';
 
           const tip = `${escapeHTML(t.activity)} | ${fmt(t.start)} → ${fmt(t.end)}${t.owner?' | '+escapeHTML(t.owner):''}`;
-          const ownerActive = t.owner && t.owner === activeOwner ? ' active-owner' : '';
+          const ownerActive = t.owner && t.owner === App.state.activeOwner ? ' active-owner' : '';
           const msKey = `${t.func}::${t.activity}`;
-          const isTaskMs = taskMilestones.has(msKey);
+          const isTaskMs = App.state.taskMilestones.has(msKey);
           const ragLabel = {red:'Overdue',amber:'At Risk',green:'Done',blue:'In Progress',grey:'Not Started'}[rag] || 'Unknown';
 
           let barFillHTML = '', taskDiamond = '';
@@ -3807,7 +3826,7 @@ function renderTable() {
             `<td class="extra-col-td" title="${escapeHTML(n)}: ${escapeHTML((t._extra && t._extra[n]) || '')}">${escapeHTML((t._extra && t._extra[n]) || '—')}</td>`
           ).join('');
 
-          const taskIdx = _lastRenderedTasks.indexOf(t);
+          const taskIdx = App.state._lastRenderedTasks.indexOf(t);
           out += `<tr class="task-row"${childrenHidden?' style="display:none"':''} data-action="show-detail" data-task-idx="${taskIdx}">
             <td class="activity-cell">
               <span class="task-ms-btn${isTaskMs?' ms-active':''}" data-action="toggle-task-ms" data-key="${escapeHTML(msKey)}" title="${isTaskMs?'Remove milestone':'Mark as milestone'}">◆</span>${escapeHTML(t.activity)}</td>
@@ -3845,19 +3864,19 @@ function renderTable() {
   document.getElementById('table-wrap').innerHTML = html;
 }
 
-function drillMonth(date) { zoomMode = 'month'; zoomMonth = date; renderTable(); }
-function drillBack()       { zoomMode = 'overview'; zoomMonth = null; renderTable(); }
+function drillMonth(date) { App.state.zoomMode = 'month'; App.state.zoomMonth = date; renderTable(); }
+function drillBack()       { App.state.zoomMode = 'overview'; App.state.zoomMonth = null; renderTable(); }
 
 // Wire filters
 ['funcFilter','phaseFilter','accountableFilter','statusFilter','priorityFilter'].forEach(id => {
   document.getElementById(id).addEventListener('change', () => {
-    if (dashboardActive) renderDashboard(); else renderAll();
+    if (App.state.dashboardActive) renderDashboard(); else renderAll();
   });
 });
-// ownerFilter: sync activeOwner state AND re-render in one listener (not two).
+// ownerFilter: sync App.state.activeOwner state AND re-render in one listener (not two).
 document.getElementById('ownerFilter').addEventListener('change', function() {
-  activeOwner = this.value;
-  if (dashboardActive) renderDashboard(); else renderAll();
+  App.state.activeOwner = this.value;
+  if (App.state.dashboardActive) renderDashboard(); else renderAll();
 });
 
 // ── Task Detail Drawer ────────────────────────────────────────────────────────
@@ -3895,7 +3914,7 @@ function showTaskDetail(t) {
 
   // Execution-specific fields (only if they exist and aren't already covered)
   let execHTML = '';
-  if (viewMode === 'execution') {
+  if (App.state.viewMode === 'execution') {
     const execFields = [
       ['Responsible',    t.responsible],
       ['Accountable',    t.accountable],
@@ -3919,7 +3938,7 @@ function showTaskDetail(t) {
   if (extras.length) {
     extraHTML = `<div class="td-section">
       <div class="td-section-label">
-        <span class="td-extra-badge">${proj().name || activeProjectId}</span> project fields
+        <span class="td-extra-badge">${proj().name || App.state.activeProjectId}</span> project fields
       </div>
       ${extras.map(([k,v]) => field(k, v)).join('')}
     </div>`;
@@ -3982,7 +4001,7 @@ document.body.addEventListener('click', function(e) {
     // Ignore if the click was on an interactive child (milestone btn, owner pill, function pill)
     if (e.target.closest('[data-action="toggle-task-ms"],[data-action="filter-owner"],[data-action="filter-function-quick"]')) return;
     const idx = parseInt(el.dataset.taskIdx, 10);
-    if (!isNaN(idx) && _lastRenderedTasks[idx]) showTaskDetail(_lastRenderedTasks[idx]);
+    if (!isNaN(idx) && App.state._lastRenderedTasks[idx]) showTaskDetail(App.state._lastRenderedTasks[idx]);
 
   } else if (action === 'toggle-ms-panel') {
     const header = document.getElementById('ms-panel-header');
@@ -4121,21 +4140,21 @@ function renderDashboard() {
   const selAccountable = document.getElementById('accountableFilter') ? document.getElementById('accountableFilter').value : '';
   const selStatus = document.getElementById('statusFilter') ? document.getElementById('statusFilter').value : '';
   const selPriority = document.getElementById('priorityFilter') ? document.getElementById('priorityFilter').value : '';
-  if (selOwner !== activeOwner) activeOwner = selOwner;
+  if (selOwner !== App.state.activeOwner) App.state.activeOwner = selOwner;
 
-  const isExec = viewMode === 'execution';
-  const source = isExec ? executionTasks : allTasks;
+  const isExec = App.state.viewMode === 'execution';
+  const source = isExec ? App.state.executionTasks : App.state.allTasks;
 
   let tasks = source.filter(t => {
     if (selFunc  && t.func  !== selFunc)  return false;
     if (selPhase && t.phase !== selPhase) return false;
     if (isExec) {
-      if (activeOwner && t.responsible !== activeOwner) return false;
+      if (App.state.activeOwner && t.responsible !== App.state.activeOwner) return false;
       if (selAccountable && t.accountable !== selAccountable) return false;
       if (selStatus && t.executionStatus !== selStatus) return false;
       if (selPriority && t.priority !== selPriority) return false;
     } else {
-      if (activeOwner && t.owner !== activeOwner) return false;
+      if (App.state.activeOwner && t.owner !== App.state.activeOwner) return false;
     }
     return true;
   }).map(t => ({ ...t, _rag: isExec ? executionRagStatus(t) : ragStatus(t) }));
@@ -4257,7 +4276,7 @@ function renderDashboard() {
   const chips = [];
   if (selFunc) chips.push(`Function: ${selFunc}`);
   if (selPhase) chips.push(`Phase: ${selPhase}`);
-  if (activeOwner) chips.push(`${ownerLabel}: ${activeOwner}`);
+  if (App.state.activeOwner) chips.push(`${ownerLabel}: ${App.state.activeOwner}`);
   if (isExec && selAccountable) chips.push(`Accountable: ${selAccountable}`);
   if (isExec && selStatus) chips.push(`Status: ${selStatus}`);
   if (isExec && selPriority) chips.push(`Priority: ${selPriority}`);
@@ -4267,7 +4286,7 @@ function renderDashboard() {
 
   const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
   // Notes are scoped per project so switching projects starts with a clean slate.
-  const noteKey = '__dashboardReportNote_' + activeProjectId;
+  const noteKey = '__dashboardReportNote_' + App.state.activeProjectId;
   const savedNote = window[noteKey] || '';
 
   const html = `
@@ -4299,7 +4318,7 @@ function renderDashboard() {
             <div style="margin-top:6px;color:var(--text3)">Calculated from active filtered dataset based on selected function, phase, and owner filters.</div>
           </div>
         </div>
-        <div class="dev-stats">merge ${executionMergeStats.matched || 0}/${executionMergeStats.total || 0}</div>
+        <div class="dev-stats">merge ${App.state.executionMergeStats.matched || 0}/${App.state.executionMergeStats.total || 0}</div>
       </div>
       <div class="dash-card">
         <div class="dash-card-title">Volume KPI Matrix</div>
@@ -4393,7 +4412,7 @@ function renderDashboard() {
   const noteEl = document.getElementById('reportNote');
   if (noteEl) {
     noteEl.addEventListener('input', () => {
-      const noteKey = '__dashboardReportNote_' + activeProjectId;
+      const noteKey = '__dashboardReportNote_' + App.state.activeProjectId;
       window[noteKey] = noteEl.value;
     });
   }
@@ -4404,10 +4423,10 @@ function buildReportDocument() {
   const reportBody = document.getElementById('report-body');
   if (!reportBody) return null;
 
-  const isExec = viewMode === 'execution';
+  const isExec = App.state.viewMode === 'execution';
   const today = new Date();
   const reportDateStr = today.toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
-  const note = (window['__dashboardReportNote_' + activeProjectId] || '').trim();
+  const note = (window['__dashboardReportNote_' + App.state.activeProjectId] || '').trim();
 
   // Clone the report body and strip the interactive note widget — replace
   // it with a static rendering of the note text in the printable doc.
@@ -4617,7 +4636,7 @@ function downloadDashboardReport() {
   const sel = document.getElementById('projectSelector');
   if (!sel) return;
   sel.innerHTML = Object.entries(PROJECTS).map(([id, p]) =>
-    `<option value="${escapeHTML(id)}"${id === activeProjectId ? ' selected' : ''}>${escapeHTML(p.name)}</option>`
+    `<option value="${escapeHTML(id)}"${id === App.state.activeProjectId ? ' selected' : ''}>${escapeHTML(p.name)}</option>`
   ).join('');
 })();
 
